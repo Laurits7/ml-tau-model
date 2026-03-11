@@ -1,0 +1,12 @@
+torch
+torchvision
+pytorch-lightning
+omegaconf
+scikit-learn
+numpy
+vector
+awkward
+hydra-core
+tensorboard
+matplotlib
+pandas

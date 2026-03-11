@@ -1,0 +1,10 @@
+training:
+  debug_run: False
+  lr: 0.0001
+  trainer:
+    max_epochs: 3
+    
+  dataloader:
+    batch_size: 128
+    num_dataloader_workers: 1
+    prefetch_factor: 100

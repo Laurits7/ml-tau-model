@@ -1,0 +1,8 @@
+decay_mode:
+    base_dir: /path/to/base/dir
+    algorithms:
+        ParticleTransformer:
+            data_dir: ${decay_mode.base_dir}
+
+defaults:
+    - _self_

@@ -1,0 +1,27 @@
+ALGORITHM_PLOT_STYLES:
+    ParTau:
+        name: ParTau
+        marker: "X"
+        hatch: "."
+        color: "tab:blue"
+        ls: "solid"
+        label: ParTau
+        lw: 3
+        marker_size: 15
+    all:
+        name: ParTau
+        marker: "X"
+        hatch: "."
+        color: "tab:blue"
+        ls: "solid"
+        label: ParTau
+        lw: 3
+        marker_size: 15
+    
+
+defaults:
+    - tagging
+    - kinematics
+    - decay_mode
+    - charge
+    - _self_
