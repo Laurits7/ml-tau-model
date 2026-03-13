@@ -41,3 +41,13 @@ def log_all(
         tb_logger=tb_logger,
         current_epoch=current_epoch,
     )
+    charge_id.log_charge_id_performance(
+        targets=targets,
+        predictions=predictions,
+        gen_jet_tau_p4s=gen_jet_tau_p4s,
+        reco_jet_p4s=reco_jet_p4s,
+        cfg=cfg,
+        tb_logger=tb_logger,
+        current_epoch=current_epoch,
+        dataset=dataset,
+    )

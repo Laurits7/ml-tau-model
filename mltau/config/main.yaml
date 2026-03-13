@@ -1,3 +1,4 @@
+output_dir: /home/laurits/20260313_training
 defaults:
     - _self_
     - metrics/metrics

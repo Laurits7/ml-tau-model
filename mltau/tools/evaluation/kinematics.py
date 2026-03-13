@@ -184,7 +184,11 @@ class RangeContentPlot:
         bins = np.linspace(0.5, 1.5, 101)
         for ax, data in zip(self.axes, evaluator.binned_ratios):
             hep.histplot(
-                to_bh(data, bins=bins), ax=ax, density=True, label=evaluator.algorithm
+                to_bh(data, bins=bins),
+                ax=ax,
+                density=True,
+                label=evaluator.algorithm,
+                yerr=None,
             )
             ax.text(
                 0.05,

@@ -17,7 +17,7 @@ kinematics:
             nticks: 7
         response_plot:
             ylabel: "$p_T\\ scale\\ (q_{50})$"
-            ylim: [0.99, 1.01]
+            ylim:  [0.90, 1.1]
             xlabel: "$p_T^{gen}$"
             xscale: "linear"
             yscale: "linear"

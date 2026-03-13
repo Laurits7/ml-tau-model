@@ -41,13 +41,11 @@ class TaggerEvaluator:
         self.sample = sample  # TODO: Actually not used anymore
         self.algorithm = algorithm
         self.tagging_cuts = np.linspace(start=0, stop=1, num=n_classifier_cuts + 1)
-        print(f"n_bkg_total: {len(self.bkg_gen_jet_p4)}")
-        print(f"n_sig_total: {len(self.signal_gen_tau_p4)}")
 
-        self.fakerates, self.fake_numerator, self.fake_denominator = (
+        self.fakerates, self.fake_numerator_mask, self.fake_denominator_mask = (
             self._calculate_fakerates()
         )
-        self.efficiencies, self.eff_numerator, self.eff_denominator = (
+        self.efficiencies, self.eff_numerator_mask, self.eff_denominator_mask = (
             self._calculate_efficiencies()
         )
 
@@ -97,22 +95,12 @@ class TaggerEvaluator:
         )
         numerator_mask = tau_pt_mask * tau_theta_mask1 * tau_theta_mask2
         numerator_mask = numerator_mask * denominator_mask
-
-        # Apply masks to data & calculate fakerate
-        fakes_denominator = self.bkg_gen_jet_p4[
-            denominator_mask
-        ]  # TODO: Why not just  sum (multiply) the masks?
-        fakes_numerator = self.bkg_gen_jet_p4[
-            numerator_mask
-        ]  # TODO: Why not just  sum (multiply) the masks?
-        n_all = len(fakes_denominator)
+        n_all = np.sum(denominator_mask)
         for cut in self.tagging_cuts:
-            n_passing_cuts = len(
-                fakes_numerator[self.bkg_predictions[numerator_mask] > cut]
-            )  # TODO: Why not just  sum (multiply) the masks?
+            n_passing_cuts = np.sum(self.bkg_predictions[numerator_mask] > cut)
             fakerate = n_passing_cuts / n_all
             fakerates.append(fakerate)
-        return fakerates, fakes_numerator, fakes_denominator
+        return fakerates, numerator_mask, denominator_mask
 
     def _calculate_efficiencies(self):
         efficiencies = []
@@ -143,22 +131,12 @@ class TaggerEvaluator:
         numerator_mask = tau_pt_mask * tau_theta_mask1 * tau_theta_mask2
         numerator_mask = numerator_mask * denominator_mask
 
-        # Apply masks to data & calculate efficiencies
-        eff_denominator = self.signal_gen_tau_p4[
-            denominator_mask
-        ]  # TODO: Why not just  sum (multiply) the masks?
-        eff_numerator = self.signal_gen_tau_p4[
-            numerator_mask
-        ]  # TODO: Why not just  sum (multiply) the masks?
-        n_all = len(eff_denominator)
+        n_all = np.sum(denominator_mask)
         for cut in self.tagging_cuts:
-            n_passing_cuts = len(
-                eff_numerator[self.signal_predictions[numerator_mask] > cut]
-            )  # TODO: Why not just  sum (multiply) the masks?
-
+            n_passing_cuts = np.sum(self.signal_predictions[numerator_mask] > cut)
             efficiency = n_passing_cuts / n_all
             efficiencies.append(efficiency)
-        return efficiencies, eff_numerator, eff_denominator
+        return efficiencies, numerator_mask, denominator_mask
 
     def _calculate_wps(self):
         working_points = {"Loose": 0.8, "Medium": 0.6, "Tight": 0.4}  # Efficiencies
@@ -174,8 +152,12 @@ class TaggerEvaluator:
         return wp_values["Loose"], wp_values["Medium"], wp_values["Tight"]
 
     def _get_working_point_efficiencies(self, name, metric):
-        eff_var_denom = getattr(self.eff_denominator, name).to_numpy()
-        eff_var_num = getattr(self.eff_numerator, name).to_numpy()
+        medium_wp_mask = self.signal_predictions > self.medium_wp
+        var_values = getattr(self.signal_gen_tau_p4, name).to_numpy()
+        if name == "theta":
+            var_values = np.rad2deg(var_values)
+        eff_var_denom = var_values[self.eff_denominator_mask]
+        eff_var_num = var_values[medium_wp_mask * self.eff_numerator_mask]
         bin_edges = np.linspace(
             min(eff_var_denom), max(eff_var_denom), metric.n_bins + 1
         )
@@ -190,10 +172,12 @@ class TaggerEvaluator:
         )
 
     def _get_working_point_fakerates(self, name, metric):
-        fake_var_denom = (
-            getattr(self.fake_denominator, name).to_numpy() > self.medium_wp
-        )
-        fake_var_num = getattr(self.fake_numerator, name).to_numpy() > self.medium_wp
+        medium_wp_mask = self.bkg_predictions > self.medium_wp
+        var_values = getattr(self.bkg_gen_jet_p4, name).to_numpy()
+        if name == "theta":
+            var_values = np.rad2deg(var_values)
+        fake_var_denom = var_values[self.fake_denominator_mask]
+        fake_var_num = var_values[medium_wp_mask * self.fake_numerator_mask]
         bin_edges = np.linspace(
             min(fake_var_denom), max(fake_var_denom), metric.n_bins + 1
         )

@@ -10,7 +10,7 @@ from mltau.tools.io import ParT_dataloader as dl
 from mltau.models import ParTau_module as pm
 
 
-@hydra.main(config_path="../config", config_name="jetclass", version_base=None)
+@hydra.main(config_path="../config", config_name="main", version_base=None)
 def train(cfg: DictConfig):
     datamodule = dl.ParTDataModule(cfg=cfg, debug_run=cfg.training.debug_run)
     model = pm.ParTauModule(cfg=cfg, input_dim=13, num_dm_classes=6)
@@ -38,7 +38,6 @@ def train(cfg: DictConfig):
         max_epochs=cfg.training.trainer.max_epochs,
         callbacks=callbacks,
         logger=[
-            CSVLogger(log_dir, name="ParTau"),
             TensorBoardLogger(
                 save_dir=tb_log_dir,
                 name="ParTau_experiment",
@@ -46,7 +45,7 @@ def train(cfg: DictConfig):
                 default_hp_metric=False,
             ),
         ],
-        overfit_batches=50,
+        # overfit_batches=50,
     )
     trainer.fit(model=model, datamodule=datamodule)
 

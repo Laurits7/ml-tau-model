@@ -8,6 +8,7 @@ from omegaconf import DictConfig
 from mltau.tools.io.general import BatchInputs
 from mltau.tools.losses import SigmoidFocalLoss
 from mltau.tools.logging import logger
+from mltau.tools.logging import general as gl
 from mltau.models.ParTau import ParTau
 
 
@@ -44,13 +45,30 @@ class ParTauModule(L.LightningModule):
         self.decay_mode_loss_fn = nn.CrossEntropyLoss(reduction="none")
         self.kinematics_loss_fn = nn.HuberLoss(reduction="none", delta=1.0)
 
-    def training_step(self, batch, _batch_idx):
+    def training_step(self, batch, batch_idx):
         predictions, targets, weights = self.forward(batch)
         metrics = self.calculate_metrics(
-            targets=targets, predictions=predictions, weights=weights, dataset="train"
+            targets=targets, predictions=predictions, weights=weights
         )
-        self.log_dict(metrics)
-        return metrics["train_loss"]
+        tb_logger = self.logger.experiment
+        gl.log_metrics_dict(
+            tb_logger=tb_logger,
+            metrics_dict=metrics,
+            prefix="train_losses",
+            step=self.current_epoch,
+        )
+        inputs = BatchInputs(*batch)
+        if batch_idx % 10 == 0:  # Store every 10th batch to save memory
+            output = {
+                "predictions": predictions,
+                "targets": targets,
+                # "weights": weights,
+                "gen_jet_p4s": inputs.gen_jet_p4s,
+                "reco_jet_p4s": inputs.reco_jet_p4s,
+                "gen_jet_tau_p4s": inputs.gen_jet_tau_p4s,
+            }
+            self.training_outputs.append(output)
+        return metrics["loss"]
 
     def predict_step(self, batch, _batch_idx):
         return self.forward(batch)[0]
@@ -90,7 +108,7 @@ class ParTauModule(L.LightningModule):
         )
         return predictions, inputs.target, inputs.weight
 
-    def calculate_metrics(self, targets, predictions, weights, dataset="train"):
+    def calculate_metrics(self, targets, predictions, weights):
 
         # TODO: Account for weights.
 
@@ -125,12 +143,12 @@ class ParTauModule(L.LightningModule):
 
         # TODO: Calculate additional metrics
 
-        return {f"{dataset}_{key}": value for key, value in metrics.items()}
+        return metrics
 
     def validation_step(self, batch, _batch_idx):
         predictions, targets, weights = self.forward(batch)
         metrics = self.calculate_metrics(
-            targets=targets, predictions=predictions, weights=weights, dataset="val"
+            targets=targets, predictions=predictions, weights=weights
         )
         inputs = BatchInputs(*batch)
         output = {
@@ -142,21 +160,28 @@ class ParTauModule(L.LightningModule):
             "gen_jet_tau_p4s": inputs.gen_jet_tau_p4s,
         }
         self.validation_outputs.append(output)
-        self.log_dict(metrics)
-        return metrics["val_loss"]
+        tb_logger = self.logger.experiment
+        gl.log_metrics_dict(
+            tb_logger=tb_logger,
+            metrics_dict=metrics,
+            prefix="val_losses",
+            step=self.current_epoch,
+        )
+        return metrics["loss"]
 
     def on_validation_epoch_start(self):
         """Initialize storage for validation outputs."""
         self.validation_outputs = []
 
-    def on_validation_epoch_end(self):
-        """Aggregate validation outputs and log comprehensive metrics."""
-        # Skip logging during Lightning's sanity check (only runs 2 batches by default)
-        if self.trainer.sanity_checking:
+    def _log_at_epoch_end(self, dataset: str):
+        if dataset == "val" and self.trainer.sanity_checking:
             return
-        print("Num batches", len(self.validation_outputs))
-        if hasattr(self, "validation_outputs") and self.validation_outputs:
 
+        dataset_outputs = (
+            self.validation_outputs if dataset == "val" else self.training_outputs
+        )
+
+        if dataset_outputs:
             # Aggregate all predictions, targets, and weights
             all_predictions = {}
             all_targets = {}
@@ -165,7 +190,7 @@ class ParTauModule(L.LightningModule):
             all_gen_jet_tau_p4s = {}
             all_reco_jet_p4s = {}
 
-            for output in self.validation_outputs:
+            for output in dataset_outputs:
                 # Concatenate predictions for each head
                 for key, pred in output["predictions"].items():
                     if key not in all_predictions:
@@ -231,8 +256,18 @@ class ParTauModule(L.LightningModule):
                 cfg=self.cfg,
                 tb_logger=tb_logger,
                 current_epoch=current_epoch,
-                dataset="val",
+                dataset=dataset,
             )
 
             # Clear outputs to free memory
-            self.validation_outputs.clear()
+            dataset_outputs.clear()
+
+    def on_validation_epoch_end(self):
+        self._log_at_epoch_end(dataset="val")
+
+    def on_train_epoch_start(self):
+        """Initialize storage for training outputs."""
+        self.training_outputs = []
+
+    def on_train_epoch_end(self):
+        self._log_at_epoch_end(dataset="train")

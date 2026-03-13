@@ -19,7 +19,7 @@ tagging:
                 theta: "$\\theta^{gen\\mathrm{-}jet}\\,\\, [ ^{o} ]$"
             ylabel: "$P_{misid}$"
             yscale: "log"
-            ylim: [5e-6, 2e-2]
+            ylim: [5e-6, 1e0]
     cuts:
         min_pt: 20
         min_theta: 10
@@ -37,5 +37,3 @@ tagging:
             x_range: [10, 90]
             n_bins: 9
             x_maj_tick_spacing: 20
-    defaults:
-        - _self_
