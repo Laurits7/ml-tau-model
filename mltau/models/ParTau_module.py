@@ -167,6 +167,7 @@ class ParTauModule(L.LightningModule):
             prefix="val_losses",
             step=self.current_epoch,
         )
+        self.log("val_loss", metrics["loss"])
         return metrics["loss"]
 
     def on_validation_epoch_start(self):

@@ -193,7 +193,11 @@ class RangeContentPlot:
             ax.text(
                 0.05,
                 0.95,
-                f"IQR = {IQR(data):.3f}",
+                (
+                    f"IQR = {IQR(data) / np.median(data):.3f}"
+                    if len(data) > 0
+                    else "IQR/median = N/A"
+                ),
                 transform=ax.transAxes,
                 fontsize=8,
                 va="top",
