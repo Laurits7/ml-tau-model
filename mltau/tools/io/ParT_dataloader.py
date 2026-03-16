@@ -111,23 +111,27 @@ class ParticleTransformerDataset(IterableDataset):
             gen_jet_tau_decaymode_reduced, 6
         ).float()
 
-        vis_pt_ratio = torch.tensor(gen_jet_tau_p4s.pt / jet_p4s.pt)
-
         gen_jet_tau_decaymode_exists = (
             torch.tensor(ak.to_numpy(data.gen_jet_tau_decaymode)) != -1
         ).long()
 
         charge_tensor = (torch.tensor(ak.to_numpy(data.gen_jet_tau_charge)) == 1).long()
 
-        # Stack kinematic variables into a single tensor [N, 4] for [pT_vis, theta, phi, m_vis]
+        dtheta = f.deltaPhi(gen_jet_tau_p4s.theta, jet_p4s.theta)
+        dphi = f.deltaPhi(gen_jet_tau_p4s.phi, jet_p4s.phi)
         # Add epsilon and clamp to avoid log(0) or log(negative)
+        vis_pt_ratio = torch.tensor(gen_jet_tau_p4s.pt / jet_p4s.pt)
         vis_pt_ratio_safe = torch.clamp(vis_pt_ratio, min=eps)
+
+        vis_m_ratio = torch.tensor(gen_jet_tau_p4s.mass / jet_p4s.mass)
+        vis_m_ratio_safe = torch.clamp(vis_m_ratio, min=eps)
+        # Stack kinematic variables into a single tensor [N, 4] for [pT_vis, theta, phi, m_vis]
         kinematics_tensor = torch.stack(
             [
                 torch.log(vis_pt_ratio_safe),  # pT_vis (log of pT ratio) - safe version
-                torch.tensor(gen_jet_tau_p4s.theta),  # theta
-                torch.tensor(gen_jet_tau_p4s.phi),  # phi_vis
-                torch.tensor(gen_jet_tau_p4s.mass),  # m_vis
+                torch.tensor(dtheta),  # delta theta between gen_vis_tau and reco_jet
+                torch.tensor(dphi),  # delta phi  between gen_vis_tau and reco_jet
+                torch.log(vis_m_ratio_safe),  # m_vis
             ],
             dim=-1,
         )  # Stack along last dimension to get [N, 4]
