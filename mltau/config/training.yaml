@@ -5,6 +5,6 @@ training:
     max_epochs: 150
     
   dataloader:
-    batch_size: 128
+    batch_size: 1024
     num_dataloader_workers: 1
     prefetch_factor: 100

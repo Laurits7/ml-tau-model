@@ -28,7 +28,7 @@ class TaggerEvaluator:
         cfg: DictConfig,
         sample: str,
         algorithm: str,
-        n_classifier_cuts: int = 100,
+        n_classifier_cuts: int = 200,
     ):
         self.signal_predictions = signal_predictions
         self.signal_gen_tau_p4 = g.reinitialize_p4(signal_gen_tau_p4)

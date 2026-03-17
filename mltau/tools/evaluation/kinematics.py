@@ -98,23 +98,20 @@ class RegressionEvaluator:
         self,
         prediction: np.array,
         truth: np.array,
-        cfg: DictConfig,
-        sample_name: str,
+        bin_edges: np.array,
         algorithm: str,
+        sample_name: str = "",
     ):
-        self.cfg = cfg
         self.prediction = np.array(prediction)
         self.truth = np.array(truth)
-        self.gen_tau_pt = truth
+        self.gen_tau_pt = self.truth
         self.algorithm = algorithm
-        self.ratios = prediction / truth
+        self.ratios = self.prediction / self.truth
 
         self.resolution_function = IQR
         self.sample = sample_name
         self.response_function = np.median
-        self.bin_edges = np.array(
-            self.cfg.metrics.kinematics.ratio_plot.bin_edges[sample_name]
-        )
+        self.bin_edges = np.array(bin_edges)
         self.bin_centers = calculate_bin_centers(self.bin_edges)[0]
         self.resolutions, self.responses, self.binned_ratios = self._get_binned_values(
             self.ratios, self.truth
@@ -123,7 +120,7 @@ class RegressionEvaluator:
 
     def _get_binned_values(self, ratios, gen_tau_vis_pt):
         binned_gen_tau_pt = np.digitize(
-            gen_tau_vis_pt, bins=self.bin_edges
+            np.array(gen_tau_vis_pt), bins=self.bin_edges
         )  # Biggest idx is overflow
         binned_ratios = [
             ratios[binned_gen_tau_pt == bin_idx]
@@ -131,15 +128,12 @@ class RegressionEvaluator:
         ]
         resolutions = np.array(
             [
-                self.resolution_function(ratios) if len(ratios) > 0 else 0
-                for ratios in binned_ratios
+                self.resolution_function(r) if len(r) > 0 else np.nan
+                for r in binned_ratios
             ]
         )
         responses = np.array(
-            [
-                self.response_function(ratios) if len(ratios) > 0 else -999
-                for ratios in binned_ratios
-            ]
+            [self.response_function(r) if len(r) > 0 else np.nan for r in binned_ratios]
         )
         return resolutions / responses, responses, binned_ratios
 
@@ -156,13 +150,38 @@ class RegressionEvaluator:
         print("----------------------------")
 
 
-class RangeContentPlot:
-    def __init__(self, cfg, sample_name):
-        self.cfg = cfg
-        self.sample_name = sample_name
-        self.bin_edges = np.array(
-            self.cfg.metrics.kinematics.ratio_plot.bin_edges[self.sample_name]
+class DeltaREvaluator:
+    def __init__(
+        self,
+        deltaR: np.array,
+        pt_truth: np.array,
+        bin_edges: np.array,
+        algorithm: str,
+    ):
+        self.deltaR = np.array(deltaR)
+        self.pt_truth = np.array(pt_truth)
+        self.algorithm = algorithm
+        self.bin_edges = np.array(bin_edges)
+        self.bin_centers = calculate_bin_centers(self.bin_edges)[0]
+        self.medians, self.binned_deltaRs = self._get_binned_values()
+        self.median = np.median(self.deltaR)
+
+    def _get_binned_values(self):
+        binned_pt = np.digitize(self.pt_truth, bins=self.bin_edges)
+        binned_deltaRs = [
+            self.deltaR[binned_pt == bin_idx]
+            for bin_idx in range(1, len(self.bin_edges))
+        ]
+        medians = np.array(
+            [np.median(b) if len(b) > 0 else np.nan for b in binned_deltaRs]
         )
+        return medians, binned_deltaRs
+
+
+class RangeContentPlot:
+    def __init__(self, bin_edges: np.array, xlabel: str):
+        self.bin_edges = np.array(bin_edges)
+        self.xlabel = xlabel
         self.fig, self.axes = self.plot()
 
     def plot(self):
@@ -172,8 +191,9 @@ class RangeContentPlot:
             if i == (len(self.bin_edges) - 1):
                 break
             ax.set_title(
-                r"$p_{\tau,true} \in$"
-                + f"$[{self.bin_edges[i]}, {self.bin_edges[i + 1]}]\ GeV$",
+                f"{self.xlabel}"
+                + r" $\in$"
+                + f"$[{self.bin_edges[i]}, {self.bin_edges[i + 1]}]$",
                 fontsize=12,
             )
             ax.set_xlim(0.5, 1.5)
@@ -197,6 +217,58 @@ class RangeContentPlot:
                     f"IQR = {IQR(data) / np.median(data):.3f}"
                     if len(data) > 0
                     else "IQR/median = N/A"
+                ),
+                transform=ax.transAxes,
+                fontsize=8,
+                va="top",
+                ha="left",
+            )
+
+    def save(self, output_path):
+        self.fig.savefig(output_path, bbox_inches="tight", format="pdf")
+        plt.close("all")
+
+
+class DeltaRContentPlot:
+    def __init__(self, bin_edges: np.array, xlabel: str, xlim: tuple = (0.0, 0.5)):
+        self.bin_edges = np.array(bin_edges)
+        self.xlabel = xlabel
+        self.xlim = xlim
+        self.fig, self.axes = self.plot()
+
+    def plot(self):
+        fig, rows = plt.subplots(nrows=3, ncols=4, sharex="col", figsize=(16, 9))
+        axes = rows.flatten()
+        for i, ax in enumerate(axes):
+            if i == (len(self.bin_edges) - 1):
+                break
+            ax.set_title(
+                f"{self.xlabel}"
+                + r" $\in$"
+                + f"$[{self.bin_edges[i]}, {self.bin_edges[i + 1]}]$",
+                fontsize=12,
+            )
+            ax.set_xlim(*self.xlim)
+            ax.set_xlabel(r"$\Delta R$", fontsize=12)
+        return fig, axes
+
+    def add_line(self, evaluator: "DeltaREvaluator"):
+        bins = np.linspace(self.xlim[0], self.xlim[1], 101)
+        for ax, data in zip(self.axes, evaluator.binned_deltaRs):
+            hep.histplot(
+                to_bh(data, bins=bins),
+                ax=ax,
+                density=True,
+                label=evaluator.algorithm,
+                yerr=None,
+            )
+            ax.text(
+                0.05,
+                0.95,
+                (
+                    f"median = {np.median(data):.3f}"
+                    if len(data) > 0
+                    else "median = N/A"
                 ),
                 transform=ax.transAxes,
                 fontsize=8,
@@ -264,25 +336,23 @@ class LinePlot:
 
 
 class Resolution2DPlot:
-    def __init__(self, cfg, sample, evaluator):
-        self.cfg = cfg
-        self.sample = sample
+    def __init__(self, bin_edges: np.array, evaluator, xlabel: str):
+        self.bin_edges = np.array(bin_edges)
         self.evaluator = evaluator
+        self.xlabel = xlabel
         self.fig, self.ax = self.plot()
 
     def plot(self):
         fig, ax = plot_regression_confusion_matrix(
             y_true=self.evaluator.truth,
             y_pred=self.evaluator.prediction,
-            left_bin_edge=0.0,
-            right_bin_edge=self.cfg.metrics.kinematics.ratio_plot.bin_edges[
-                self.sample
-            ][-1],
+            left_bin_edge=self.bin_edges[0],
+            right_bin_edge=self.bin_edges[-1],
             n_bins=24,
             figsize=(8, 9),
             cmap="Greys",
-            y_label=r"Predicted $p_T$ [GeV]",
-            x_label=r"True $p_T$ [GeV]",
+            y_label=f"Predicted {self.xlabel}",
+            x_label=f"True {self.xlabel}",
             title=None,
         )
         return fig, ax
@@ -293,30 +363,31 @@ class Resolution2DPlot:
 
 
 class RegressionMultiEvaluator:
-    def __init__(self, output_dir: str, cfg: DictConfig, sample: str):
+    def __init__(self, output_dir: str, cfg: DictConfig, sample: str, var_cfg):
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
         self.cfg = cfg
         self.sample = sample
+        self.var_cfg = var_cfg
         self.response_lineplot = LinePlot(
             cfg=self.cfg,
-            xlabel=cfg.metrics.kinematics.ratio_plot.response_plot.xlabel,
-            ylabel=cfg.metrics.kinematics.ratio_plot.response_plot.ylabel,
-            xscale=cfg.metrics.kinematics.ratio_plot.response_plot.xscale,
-            yscale=cfg.metrics.kinematics.ratio_plot.response_plot.yscale,
-            ymin=cfg.metrics.kinematics.ratio_plot.response_plot.ylim[0],
-            ymax=cfg.metrics.kinematics.ratio_plot.response_plot.ylim[1],
-            nticks=cfg.metrics.kinematics.ratio_plot.response_plot.nticks,
+            xlabel=var_cfg.response_plot.xlabel,
+            ylabel=var_cfg.response_plot.ylabel,
+            xscale=var_cfg.response_plot.xscale,
+            yscale=var_cfg.response_plot.yscale,
+            ymin=var_cfg.response_plot.ylim[0],
+            ymax=var_cfg.response_plot.ylim[1],
+            nticks=var_cfg.response_plot.nticks,
         )
         self.resolution_lineplot = LinePlot(
             cfg=self.cfg,
-            xlabel=cfg.metrics.kinematics.ratio_plot.resolution_plot.xlabel,
-            ylabel=cfg.metrics.kinematics.ratio_plot.resolution_plot.ylabel,
-            xscale=cfg.metrics.kinematics.ratio_plot.resolution_plot.xscale,
-            yscale=cfg.metrics.kinematics.ratio_plot.resolution_plot.yscale,
-            ymin=cfg.metrics.kinematics.ratio_plot.resolution_plot.ylim[0],
-            ymax=cfg.metrics.kinematics.ratio_plot.resolution_plot.ylim[1],
-            nticks=cfg.metrics.kinematics.ratio_plot.resolution_plot.nticks,
+            xlabel=var_cfg.resolution_plot.xlabel,
+            ylabel=var_cfg.resolution_plot.ylabel,
+            xscale=var_cfg.resolution_plot.xscale,
+            yscale=var_cfg.resolution_plot.yscale,
+            ymin=var_cfg.resolution_plot.ylim[0],
+            ymax=var_cfg.resolution_plot.ylim[1],
+            nticks=var_cfg.resolution_plot.nticks,
         )
         self.bin_distributions_plots = {}
         self.resolution_2d_plots = {}
@@ -337,11 +408,11 @@ class RegressionMultiEvaluator:
                 label="",
             )
             self.resolution_2d_plots[evaluator.algorithm] = Resolution2DPlot(
-                self.cfg, self.sample, evaluator
+                evaluator.bin_edges, evaluator, xlabel=self.var_cfg.response_plot.xlabel
             )
             self.bin_distributions_plots[evaluator.algorithm] = RangeContentPlot(
-                self.cfg, self.sample
-            )  # TODO: Should define in the init?
+                evaluator.bin_edges, xlabel=self.var_cfg.response_plot.xlabel
+            )
             self.bin_distributions_plots[evaluator.algorithm].add_line(evaluator)
             if evaluator.sample not in self.resolution_performance_info.keys():
                 self.resolution_performance_info[evaluator.sample] = {}

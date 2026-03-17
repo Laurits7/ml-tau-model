@@ -50,13 +50,8 @@ class ParTauModule(L.LightningModule):
         metrics = self.calculate_metrics(
             targets=targets, predictions=predictions, weights=weights
         )
-        tb_logger = self.logger.experiment
-        gl.log_metrics_dict(
-            tb_logger=tb_logger,
-            metrics_dict=metrics,
-            prefix="train_losses",
-            step=self.current_epoch,
-        )
+        for key, value in metrics.items():
+            self.training_loss_accumulator[key].append(value.detach())
         inputs = BatchInputs(*batch)
         if batch_idx % 10 == 0:  # Store every 10th batch to save memory
             output = {
@@ -160,19 +155,23 @@ class ParTauModule(L.LightningModule):
             "gen_jet_tau_p4s": inputs.gen_jet_tau_p4s,
         }
         self.validation_outputs.append(output)
-        tb_logger = self.logger.experiment
-        gl.log_metrics_dict(
-            tb_logger=tb_logger,
-            metrics_dict=metrics,
-            prefix="val_losses",
-            step=self.current_epoch,
-        )
-        self.log("val_loss", metrics["loss"])
+        for key, value in metrics.items():
+            self.validation_loss_accumulator[key].append(value.detach())
         return metrics["loss"]
 
     def on_validation_epoch_start(self):
         """Initialize storage for validation outputs."""
         self.validation_outputs = []
+        self.validation_loss_accumulator = {
+            key: []
+            for key in [
+                "loss",
+                "tau_id_loss",
+                "charge_loss",
+                "decay_mode_loss",
+                "kinematics_loss",
+            ]
+        }
 
     def _log_at_epoch_end(self, dataset: str):
         if dataset == "val" and self.trainer.sanity_checking:
@@ -264,11 +263,48 @@ class ParTauModule(L.LightningModule):
             dataset_outputs.clear()
 
     def on_validation_epoch_end(self):
+        if not self.trainer.sanity_checking:
+            tb_logger = self.logger.experiment
+            epoch_metrics = {
+                k: torch.stack(v).mean()
+                for k, v in self.validation_loss_accumulator.items()
+                if v
+            }
+            gl.log_metrics_dict(
+                tb_logger=tb_logger,
+                metrics_dict=epoch_metrics,
+                prefix="val_losses",
+                step=self.current_epoch,
+            )
+            for k, v in epoch_metrics.items():
+                self.log(f"val_losses/{k}", v)
         self._log_at_epoch_end(dataset="val")
 
     def on_train_epoch_start(self):
         """Initialize storage for training outputs."""
         self.training_outputs = []
+        self.training_loss_accumulator = {
+            key: []
+            for key in [
+                "loss",
+                "tau_id_loss",
+                "charge_loss",
+                "decay_mode_loss",
+                "kinematics_loss",
+            ]
+        }
 
     def on_train_epoch_end(self):
+        tb_logger = self.logger.experiment
+        epoch_metrics = {
+            k: torch.stack(v).mean()
+            for k, v in self.training_loss_accumulator.items()
+            if v
+        }
+        gl.log_metrics_dict(
+            tb_logger=tb_logger,
+            metrics_dict=epoch_metrics,
+            prefix="train_losses",
+            step=self.current_epoch,
+        )
         self._log_at_epoch_end(dataset="train")

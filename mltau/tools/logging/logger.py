@@ -30,6 +30,7 @@ def log_all(
         targets=targets,
         predictions=predictions,
         reco_jet_p4s=reco_jet_p4s,
+        gen_jet_tau_p4s=gen_jet_tau_p4s,
         cfg=cfg,
         tb_logger=tb_logger,
         current_epoch=current_epoch,
