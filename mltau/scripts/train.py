@@ -41,7 +41,7 @@ def train(cfg: DictConfig):
             TensorBoardLogger(
                 save_dir=tb_log_dir,
                 name="ParTau_experiment",
-                log_graph=True,  # Log model graph
+                log_graph=False,
                 default_hp_metric=False,
             ),
         ],

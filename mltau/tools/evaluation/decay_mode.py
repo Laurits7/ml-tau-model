@@ -116,9 +116,15 @@ class DecayModeEvaluator:
         class_TNR = (
             self.confusion_matrix.sum() - (class_FPR + class_FNR + class_TPR)
         ) / self.confusion_matrix.sum()
-        class_precision = class_TPR / (class_TPR + class_FPR)
-        class_recall = class_TPR / (class_TPR + class_FNR)
-        class_F1 = 2 * class_precision * class_recall / (class_precision + class_recall)
+        denom_prec = class_TPR + class_FPR
+        denom_rec = class_TPR + class_FNR
+        with np.errstate(divide="ignore", invalid="ignore"):
+            class_precision = np.where(denom_prec > 0, class_TPR / denom_prec, 0.0)
+            class_recall = np.where(denom_rec > 0, class_TPR / denom_rec, 0.0)
+            denom_f1 = class_precision + class_recall
+            class_F1 = np.where(
+                denom_f1 > 0, 2 * class_precision * class_recall / denom_f1, 0.0
+            )
         class_accuracy = (class_TPR + class_TNR) / (
             class_TPR + class_TNR + class_FPR + class_FNR
         )
@@ -128,9 +134,13 @@ class DecayModeEvaluator:
         TPR = np.sum(class_TPR) / len(class_TPR)
         TNR = np.sum(class_TNR) / len(class_TNR)
 
-        precision = TPR / (TPR + FPR)
-        recall = TPR / (TPR + FNR)
-        F1 = 2 * precision * recall / (precision + recall)
+        precision = TPR / (TPR + FPR) if (TPR + FPR) > 0 else 0.0
+        recall = TPR / (TPR + FNR) if (TPR + FNR) > 0 else 0.0
+        F1 = (
+            2 * precision * recall / (precision + recall)
+            if (precision + recall) > 0
+            else 0.0
+        )
         accuracy = (TPR + TNR) / (TPR + TNR + FPR + FNR)
         class_metrics = {
             "class_FPR": class_FPR,

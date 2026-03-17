@@ -182,9 +182,6 @@ class ParticleTransformerDataset(IterableDataset):
             gen_jet_p4s,
         )
 
-    def __len__(self):
-        return self.num_rows
-
     def _move_to_device(self, batch):
         if isinstance(batch, (tuple, list)):
             return [self._move_to_device(x) for x in batch]
@@ -304,6 +301,11 @@ class ParTDataModule(LightningDataModule):
                 batch_size=batch_size,
                 persistent_workers=True,
                 num_workers=self.cfg.training.dataloader.num_dataloader_workers,
+                multiprocessing_context=(
+                    "forkserver"
+                    if self.cfg.training.dataloader.num_dataloader_workers > 1
+                    else None
+                ),
                 # prefetch_factor=self.cfg.training.dataloader.prefetch_factor,
             )
             self.val_loader = DataLoader(
@@ -311,6 +313,11 @@ class ParTDataModule(LightningDataModule):
                 batch_size=batch_size,
                 persistent_workers=True,
                 num_workers=self.cfg.training.dataloader.num_dataloader_workers,
+                multiprocessing_context=(
+                    "forkserver"
+                    if self.cfg.training.dataloader.num_dataloader_workers > 1
+                    else None
+                ),
                 # prefetch_factor=self.cfg.training.dataloader.prefetch_factor,
             )
         elif stage == "test":

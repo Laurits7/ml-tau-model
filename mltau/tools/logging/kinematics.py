@@ -1,8 +1,21 @@
+import warnings
 import numpy as np
 import matplotlib.pyplot as plt
 from omegaconf import DictConfig
 from mltau.tools.evaluation import kinematics as k
 from mltau.tools.general import reinitialize_p4
+
+warnings.filterwarnings("ignore", message=".*sumw are zero.*", category=RuntimeWarning)
+warnings.filterwarnings(
+    "ignore",
+    message=".*divide by zero encountered in scalar divide.*",
+    category=RuntimeWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=".*invalid value encountered in multiply.*",
+    category=RuntimeWarning,
+)
 
 
 def _log_single_variable(
@@ -222,4 +235,12 @@ def log_all_kinematics_metrics(
 
     tb_logger.add_scalar(
         "kinematics/deltaR/median", deltaR_evaluator.median, current_epoch
+    )
+    tb_logger.add_scalar(
+        "kinematics/deltaR/mean", float(np.mean(deltaR)), current_epoch
+    )
+    tb_logger.add_scalar(
+        "kinematics/energy/mean_diff",
+        float(np.mean(np.array(pred_energy) - np.array(true_energy))),
+        current_epoch,
     )

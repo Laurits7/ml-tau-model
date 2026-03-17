@@ -203,13 +203,14 @@ class RangeContentPlot:
     def add_line(self, evaluator):
         bins = np.linspace(0.5, 1.5, 101)
         for ax, data in zip(self.axes, evaluator.binned_ratios):
-            hep.histplot(
-                to_bh(data, bins=bins),
-                ax=ax,
-                density=True,
-                label=evaluator.algorithm,
-                yerr=None,
-            )
+            if len(data) > 0:
+                hep.histplot(
+                    to_bh(data, bins=bins),
+                    ax=ax,
+                    density=True,
+                    label=evaluator.algorithm,
+                    yerr=None,
+                )
             ax.text(
                 0.05,
                 0.95,
@@ -255,13 +256,14 @@ class DeltaRContentPlot:
     def add_line(self, evaluator: "DeltaREvaluator"):
         bins = np.linspace(self.xlim[0], self.xlim[1], 101)
         for ax, data in zip(self.axes, evaluator.binned_deltaRs):
-            hep.histplot(
-                to_bh(data, bins=bins),
-                ax=ax,
-                density=True,
-                label=evaluator.algorithm,
-                yerr=None,
-            )
+            if len(data) > 0:
+                hep.histplot(
+                    to_bh(data, bins=bins),
+                    ax=ax,
+                    density=True,
+                    label=evaluator.algorithm,
+                    yerr=None,
+                )
             ax.text(
                 0.05,
                 0.95,

@@ -6,5 +6,5 @@ training:
     
   dataloader:
     batch_size: 1024
-    num_dataloader_workers: 1
+    num_dataloader_workers: 4
     prefetch_factor: 100
