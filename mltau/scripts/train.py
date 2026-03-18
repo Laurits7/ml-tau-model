@@ -26,7 +26,7 @@ def train(cfg: DictConfig):
         TQDMProgressBar(refresh_rate=1000),
         ModelCheckpoint(
             dirpath=models_dir,
-            monitor="val_loss",
+            monitor="val_losses/loss",
             mode="min",
             save_top_k=-1,
             save_weights_only=True,
@@ -41,7 +41,7 @@ def train(cfg: DictConfig):
             TensorBoardLogger(
                 save_dir=tb_log_dir,
                 name="ParTau_experiment",
-                log_graph=True,  # Log model graph
+                log_graph=False,
                 default_hp_metric=False,
             ),
         ],

@@ -1,92 +1,246 @@
+import warnings
 import numpy as np
 import matplotlib.pyplot as plt
 from omegaconf import DictConfig
 from mltau.tools.evaluation import kinematics as k
 from mltau.tools.general import reinitialize_p4
 
+warnings.filterwarnings("ignore", message=".*sumw are zero.*", category=RuntimeWarning)
+warnings.filterwarnings(
+    "ignore",
+    message=".*divide by zero encountered in scalar divide.*",
+    category=RuntimeWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=".*invalid value encountered in multiply.*",
+    category=RuntimeWarning,
+)
 
-def log_all_kinematics_metrics(
-    targets: np.array,
-    predictions: np.array,
-    reco_jet_p4s: np.array,
+
+def _log_single_variable(
+    pred: np.array,
+    truth: np.array,
+    var_name: str,
+    var_cfg,
     cfg: DictConfig,
     tb_logger,
-    # output_dir: str,
     current_epoch: int,
-    dataset="train",
 ):
-    signal_predictions = predictions["kinematics"][targets["is_tau"] == 1]
-    signal_targets = targets["kinematics"][targets["is_tau"] == 1]
-
-    reco_jet_p4s = reinitialize_p4(reco_jet_p4s)[targets["is_tau"] == 1]
-    pred_pt = np.exp(signal_predictions[:, 0]) * reco_jet_p4s.pt
-    true_pt = np.exp(signal_targets[:, 0]) * reco_jet_p4s.pt
-
-    # PT-energy magnitude evaluation
+    """Log response, resolution, 2D resolution, and bin distribution plots for one variable."""
     evaluator = k.RegressionEvaluator(
-        prediction=pred_pt,
-        truth=true_pt,
-        cfg=cfg,
-        sample_name="all",
+        prediction=pred,
+        truth=truth,
+        bin_edges=var_cfg.bin_edges["all"],
         algorithm="all",
+        sample_name="all",
     )
 
     response_lineplot = k.LinePlot(
         cfg=cfg,
-        xlabel=cfg.metrics.kinematics.ratio_plot.response_plot.xlabel,
-        ylabel=cfg.metrics.kinematics.ratio_plot.response_plot.ylabel,
-        xscale=cfg.metrics.kinematics.ratio_plot.response_plot.xscale,
-        yscale=cfg.metrics.kinematics.ratio_plot.response_plot.yscale,
-        ymin=cfg.metrics.kinematics.ratio_plot.response_plot.ylim[0],
-        ymax=cfg.metrics.kinematics.ratio_plot.response_plot.ylim[1],
-        nticks=cfg.metrics.kinematics.ratio_plot.response_plot.nticks,
+        xlabel=var_cfg.response_plot.xlabel,
+        ylabel=var_cfg.response_plot.ylabel,
+        xscale=var_cfg.response_plot.xscale,
+        yscale=var_cfg.response_plot.yscale,
+        ymin=var_cfg.response_plot.ylim[0],
+        ymax=var_cfg.response_plot.ylim[1],
+        nticks=var_cfg.response_plot.nticks,
     )
     response_lineplot.add_line(
-        evaluator.bin_centers,
-        evaluator.responses,
-        evaluator.algorithm,
-        label="",
+        evaluator.bin_centers, evaluator.responses, evaluator.algorithm, label=""
     )
-
     tb_logger.add_figure(
-        "kinematics/response_vs_pt", response_lineplot.fig, current_epoch
+        f"kinematics/{var_name}/responses", response_lineplot.fig, current_epoch
     )
     plt.close(response_lineplot.fig)
 
     resolution_lineplot = k.LinePlot(
         cfg=cfg,
-        xlabel=cfg.metrics.kinematics.ratio_plot.resolution_plot.xlabel,
-        ylabel=cfg.metrics.kinematics.ratio_plot.resolution_plot.ylabel,
-        xscale=cfg.metrics.kinematics.ratio_plot.resolution_plot.xscale,
-        yscale=cfg.metrics.kinematics.ratio_plot.resolution_plot.yscale,
-        ymin=cfg.metrics.kinematics.ratio_plot.resolution_plot.ylim[0],
-        ymax=cfg.metrics.kinematics.ratio_plot.resolution_plot.ylim[1],
-        nticks=cfg.metrics.kinematics.ratio_plot.resolution_plot.nticks,
+        xlabel=var_cfg.resolution_plot.xlabel,
+        ylabel=var_cfg.resolution_plot.ylabel,
+        xscale=var_cfg.resolution_plot.xscale,
+        yscale=var_cfg.resolution_plot.yscale,
+        ymin=var_cfg.resolution_plot.ylim[0],
+        ymax=var_cfg.resolution_plot.ylim[1],
+        nticks=var_cfg.resolution_plot.nticks,
     )
     resolution_lineplot.add_line(
-        evaluator.bin_centers,
-        evaluator.resolutions,
-        evaluator.algorithm,
-        label="",
+        evaluator.bin_centers, evaluator.resolutions, evaluator.algorithm, label=""
     )
-
     tb_logger.add_figure(
-        "kinematics/resolution_vs_pt", resolution_lineplot.fig, current_epoch
+        f"kinematics/{var_name}/resolutions", resolution_lineplot.fig, current_epoch
     )
     plt.close(resolution_lineplot.fig)
 
-    resolution_2d_plot = k.Resolution2DPlot(cfg, "all", evaluator)
+    resolution_2d_plot = k.Resolution2DPlot(
+        var_cfg.bin_edges["all"], evaluator, xlabel=var_cfg.response_plot.xlabel
+    )
     tb_logger.add_figure(
-        "kinematics/resolution_2d", resolution_2d_plot.fig, current_epoch
+        f"kinematics/{var_name}/resolutions_2d", resolution_2d_plot.fig, current_epoch
     )
     plt.close(resolution_2d_plot.fig)
 
-    bin_distributions = k.RangeContentPlot(cfg, "all")
+    bin_distributions = k.RangeContentPlot(
+        var_cfg.bin_edges["all"], xlabel=var_cfg.response_plot.xlabel
+    )
     bin_distributions.add_line(evaluator)
     tb_logger.add_figure(
-        "kinematics/bin_distributions", bin_distributions.fig, current_epoch
+        f"kinematics/{var_name}/bin_distributions", bin_distributions.fig, current_epoch
     )
     plt.close(bin_distributions.fig)
 
-    tb_logger.add_scalar("kinematics/resolution", evaluator.resolution, current_epoch)
-    tb_logger.add_scalar("kinematics/response", evaluator.response, current_epoch)
+    tb_logger.add_scalar(
+        f"kinematics/{var_name}/resolution", evaluator.resolution, current_epoch
+    )
+    tb_logger.add_scalar(
+        f"kinematics/{var_name}/response", evaluator.response, current_epoch
+    )
+
+
+def log_all_kinematics_metrics(
+    targets: np.array,
+    predictions: np.array,
+    reco_jet_p4s: np.array,
+    gen_jet_tau_p4s,
+    cfg: DictConfig,
+    tb_logger,
+    current_epoch: int,
+    dataset="train",
+):
+    signal_mask = targets["is_tau"] == 1
+    signal_predictions = predictions["kinematics"][signal_mask]
+    signal_targets = targets["kinematics"][signal_mask]
+    reco = reinitialize_p4(reco_jet_p4s)[signal_mask]
+
+    # --- pt ---
+    pred_pt = np.exp(signal_predictions[:, 0]) * reco.pt
+    true_pt = np.exp(signal_targets[:, 0]) * reco.pt
+    _log_single_variable(
+        pred_pt, true_pt, "pt", cfg.metrics.kinematics.pt, cfg, tb_logger, current_epoch
+    )
+
+    # --- theta (radians → degrees) ---
+    pred_theta_rad = signal_predictions[:, 1] + reco.theta
+    true_theta_rad = signal_targets[:, 1] + reco.theta
+    pred_theta_deg = np.rad2deg(pred_theta_rad)
+    true_theta_deg = np.rad2deg(true_theta_rad)
+    _log_single_variable(
+        pred_theta_deg,
+        true_theta_deg,
+        "theta",
+        cfg.metrics.kinematics.theta,
+        cfg,
+        tb_logger,
+        current_epoch,
+    )
+
+    # --- phi (radians → degrees) ---
+    pred_phi_rad = signal_predictions[:, 2] + reco.phi
+    true_phi_rad = signal_targets[:, 2] + reco.phi
+    pred_phi_deg = np.rad2deg(pred_phi_rad)
+    true_phi_deg = np.rad2deg(true_phi_rad)
+    _log_single_variable(
+        pred_phi_deg,
+        true_phi_deg,
+        "phi",
+        cfg.metrics.kinematics.phi,
+        cfg,
+        tb_logger,
+        current_epoch,
+    )
+
+    # --- m_vis ---
+    pred_m = np.exp(signal_predictions[:, 3]) * reco.mass
+    true_m = np.exp(signal_targets[:, 3]) * reco.mass
+    _log_single_variable(
+        pred_m,
+        true_m,
+        "m_vis",
+        cfg.metrics.kinematics.m_vis,
+        cfg,
+        tb_logger,
+        current_epoch,
+    )
+
+    # --- eta (derived from theta) ---
+    pred_eta = -np.log(np.tan(np.clip(pred_theta_rad, 1e-6, np.pi - 1e-6) / 2))
+    true_eta = -np.log(np.tan(np.clip(true_theta_rad, 1e-6, np.pi - 1e-6) / 2))
+    _log_single_variable(
+        pred_eta,
+        true_eta,
+        "eta",
+        cfg.metrics.kinematics.eta,
+        cfg,
+        tb_logger,
+        current_epoch,
+    )
+
+    # --- energy (derived from pt and theta) ---
+    pred_energy = pred_pt / np.clip(np.sin(pred_theta_rad), 1e-6, None)
+    true_energy = true_pt / np.clip(np.sin(true_theta_rad), 1e-6, None)
+    _log_single_variable(
+        pred_energy,
+        true_energy,
+        "energy",
+        cfg.metrics.kinematics.energy,
+        cfg,
+        tb_logger,
+        current_epoch,
+    )
+
+    # --- deltaR (predicted tau vs gen_tau, binned by true pT) ---
+    gen_tau = reinitialize_p4(gen_jet_tau_p4s)[signal_mask]
+    dphi_dr = np.array(pred_phi_rad) - np.array(gen_tau.phi)
+    dphi_dr = np.arctan2(np.sin(dphi_dr), np.cos(dphi_dr))
+    deltaR = np.sqrt((np.array(pred_eta) - np.array(gen_tau.eta)) ** 2 + dphi_dr**2)
+
+    dr_cfg = cfg.metrics.kinematics.deltaR
+    deltaR_evaluator = k.DeltaREvaluator(
+        deltaR=deltaR,
+        pt_truth=np.array(true_pt),
+        bin_edges=cfg.metrics.kinematics.pt.bin_edges["all"],
+        algorithm="all",
+    )
+    median_lineplot = k.LinePlot(
+        cfg=cfg,
+        xlabel=dr_cfg.median_plot.xlabel,
+        ylabel=dr_cfg.median_plot.ylabel,
+        xscale=dr_cfg.median_plot.xscale,
+        yscale=dr_cfg.median_plot.yscale,
+        ymin=dr_cfg.median_plot.ylim[0],
+        ymax=dr_cfg.median_plot.ylim[1],
+        nticks=dr_cfg.median_plot.nticks,
+    )
+    median_lineplot.add_line(
+        deltaR_evaluator.bin_centers,
+        deltaR_evaluator.medians,
+        deltaR_evaluator.algorithm,
+        label="",
+    )
+    tb_logger.add_figure(
+        "kinematics/deltaR/median_vs_pt_plot", median_lineplot.fig, current_epoch
+    )
+    plt.close(median_lineplot.fig)
+
+    content_plot = k.DeltaRContentPlot(
+        bin_edges=cfg.metrics.kinematics.pt.bin_edges["all"],
+        xlabel=dr_cfg.median_plot.xlabel,
+        xlim=tuple(dr_cfg.content_xlim),
+    )
+    content_plot.add_line(deltaR_evaluator)
+    tb_logger.add_figure(
+        "kinematics/deltaR/bin_distributions", content_plot.fig, current_epoch
+    )
+    plt.close(content_plot.fig)
+
+    tb_logger.add_scalar(
+        "kinematics/deltaR/median", deltaR_evaluator.median, current_epoch
+    )
+    tb_logger.add_scalar(
+        "kinematics/deltaR/mean", float(np.mean(deltaR)), current_epoch
+    )
+    tb_logger.add_scalar(
+        "kinematics/energy/mean_diff",
+        float(np.mean(np.array(pred_energy) - np.array(true_energy))),
+        current_epoch,
+    )

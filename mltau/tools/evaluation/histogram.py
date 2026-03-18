@@ -77,7 +77,10 @@ class Histogram:
                     f"Incorrect number of entries for uncertainties {len(uncertainties)} != {len(self.binned_data)}"
                 )
         elif (type(uncertainties) == bool) and uncertainties:
-            self.uncertainties = 1 / np.sqrt(self.binned_data)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                self.uncertainties = np.where(
+                    self.binned_data > 0, 1 / np.sqrt(self.binned_data), 0.0
+                )
         else:
             raise AssertionError("Unknown input for uncertainties")
 

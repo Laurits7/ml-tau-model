@@ -9,4 +9,6 @@ awkward
 hydra-core
 tensorboard
 matplotlib
-pandas
+boost-histogram
+mplhep
+numba

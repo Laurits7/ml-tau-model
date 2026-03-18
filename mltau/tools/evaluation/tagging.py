@@ -28,7 +28,7 @@ class TaggerEvaluator:
         cfg: DictConfig,
         sample: str,
         algorithm: str,
-        n_classifier_cuts: int = 100,
+        n_classifier_cuts: int = 200,
     ):
         self.signal_predictions = signal_predictions
         self.signal_gen_tau_p4 = g.reinitialize_p4(signal_gen_tau_p4)
@@ -139,7 +139,7 @@ class TaggerEvaluator:
         return efficiencies, numerator_mask, denominator_mask
 
     def _calculate_wps(self):
-        working_points = {"Loose": 0.8, "Medium": 0.6, "Tight": 0.4}  # Efficiencies
+        working_points = {"Loose": 0.99, "Medium": 0.95, "Tight": 0.90}  # Efficiencies
         wp_values = {}
         for wp_name, wp_value in working_points.items():
             diff = abs(np.array(self.efficiencies) - wp_value)
