@@ -58,17 +58,17 @@ Four output heads operate on the shared CLS token embedding:
 | 6 | `cand_logerel` | $\log(E / E_\text{jet})$ |
 | 7 | `cand_deltaR` | $\Delta R(\text{cand}, \text{jet})$ |
 | 8 | `cand_charge` | Particle charge |
-| 9 | `isElectron` | $|\text{PDG}| = 11$ |
-| 10 | `isMuon` | $|\text{PDG}| = 13$ |
-| 11 | `isPhoton` | $|\text{PDG}| = 22$ |
-| 12 | `isChargedHadron` | $|\text{PDG}| = 211$ ($\pi^\pm$) |
-| 13 | `isNeutralHadron` | $|\text{PDG}| = 130$ ($K^0_L$) |
+| 9 | `isElectron` | \|PDG\| = 11 |
+| 10 | `isMuon` | \|PDG\| = 13 |
+| 11 | `isPhoton` | \|PDG\| = 22 |
+| 12 | `isChargedHadron` | \|PDG\| = 211 (π±) |
+| 13 | `isNeutralHadron` | \|PDG\| = 130 (K⁰L) |
 
 A maximum of 20 candidates per jet are used (padded/clipped).
 
 ---
 
-## Decay Mode Mapping
+## (Tau) Decay Mode Mapping
 
 | Class | HPS DM | Description |
 |-------|--------|-------------|
@@ -77,7 +77,9 @@ A maximum of 20 candidates per jet are used (padded/clipped).
 | 2 | 2, 3, 4 | 1-prong, ≥2 π⁰ |
 | 3 | 5, 10 | 3-prong, 0 π⁰ |
 | 4 | 6–9, 11–14 | 3-prong, ≥1 π⁰ |
-| 5 | −1, 15, 16 | Rare / background |
+| 5 | 16 | Rare |
+
+Leptonic decay modes (15) and background (-1) are not considered for this classification. Background is tagged in a separate head.
 
 ---
 
