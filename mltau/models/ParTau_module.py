@@ -8,7 +8,6 @@ from omegaconf import DictConfig
 from mltau.tools.io.general import BatchInputs
 from mltau.tools.losses import SigmoidFocalLoss
 from mltau.tools.logging import logger
-from mltau.tools.logging import general as gl
 from mltau.models.ParTau import ParTau
 
 
@@ -264,18 +263,11 @@ class ParTauModule(L.LightningModule):
 
     def on_validation_epoch_end(self):
         if not self.trainer.sanity_checking:
-            tb_logger = self.logger.experiment
             epoch_metrics = {
                 k: torch.stack(v).mean()
                 for k, v in self.validation_loss_accumulator.items()
                 if v
             }
-            gl.log_metrics_dict(
-                tb_logger=tb_logger,
-                metrics_dict=epoch_metrics,
-                prefix="val_losses",
-                step=self.current_epoch,
-            )
             for k, v in epoch_metrics.items():
                 self.log(f"val_losses/{k}", v)
         self._log_at_epoch_end(dataset="val")
@@ -295,16 +287,11 @@ class ParTauModule(L.LightningModule):
         }
 
     def on_train_epoch_end(self):
-        tb_logger = self.logger.experiment
         epoch_metrics = {
             k: torch.stack(v).mean()
             for k, v in self.training_loss_accumulator.items()
             if v
         }
-        gl.log_metrics_dict(
-            tb_logger=tb_logger,
-            metrics_dict=epoch_metrics,
-            prefix="train_losses",
-            step=self.current_epoch,
-        )
+        for k, v in epoch_metrics.items():
+            self.log(f"train_losses/{k}", v)
         self._log_at_epoch_end(dataset="train")
