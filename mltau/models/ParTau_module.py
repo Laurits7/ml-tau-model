@@ -8,15 +8,7 @@ from omegaconf import DictConfig
 from mltau.tools.io.general import BatchInputs
 from mltau.tools.losses import SigmoidFocalLoss
 from mltau.tools.logging import logger
-from mltau.models.ParTau import ParTau
-
-
-# Batch size 512
-# Initial lr = 0.001
-# No weight decay
-# Train 1M iterations corresponding to ~5 epochs over the full training set.
-# LR remains constant for the first 70% of iterations, then decays exponentially at an interval of every 20k iterations down to 1% of the inital value at the end of the training
-# They use checkpoint with highest accuracy.
+from mltau.models.MultiParTau import ParTau
 
 
 class ParTauModule(L.LightningModule):
@@ -127,11 +119,12 @@ class ParTauModule(L.LightningModule):
             + (decay_mode_loss + charge_loss + kinematics_loss) * targets["is_tau"]
         )  # Here use all losses only if signal sample.
 
+        is_tau_mask = targets["is_tau"].bool()
         metrics = {
             "tau_id_loss": tau_id_loss.mean(),
-            "charge_loss": charge_loss.mean(),
-            "decay_mode_loss": decay_mode_loss.mean(),
-            "kinematics_loss": kinematics_loss.mean(),
+            "charge_loss": charge_loss[is_tau_mask].mean(),
+            "decay_mode_loss": decay_mode_loss[is_tau_mask].mean(),
+            "kinematics_loss": kinematics_loss[is_tau_mask].mean(),
             "loss": combined_loss.mean(),
         }
 
