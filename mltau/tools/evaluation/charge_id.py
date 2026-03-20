@@ -23,7 +23,6 @@ class ChargeIdEvaluator:
         output_dir: str = "",
         sample: str = "",
         algorithm: str = "",
-        n_classifier_cuts: int = 100,
     ):
         self.output_dir = output_dir
         if self.output_dir != "":
@@ -35,7 +34,11 @@ class ChargeIdEvaluator:
         self.reco_jet_p4s = g.reinitialize_p4(reco_jet_p4s)
         self.cfg = cfg
         self.truth = truth
-        self.tagging_cuts = np.linspace(start=0, stop=1, num=n_classifier_cuts + 1)
+        # Use quantile-based thresholds: dense where scores concentrate (near 0/1),
+        # sparse in the middle. Capped at 1000 points for performance.
+        self.tagging_cuts = np.unique(np.concatenate(
+            [[0], np.quantile(self.predicted, np.linspace(0, 1, 1000)), [1]]
+        ))
         self.true_positive_charge_mask = self.truth == 1
         self.true_negative_charge_mask = self.truth == 0
         self.efficiencies, self.eff_denominator_masks = self._calculate_eff_fake(
@@ -114,7 +117,12 @@ class ChargeIdEvaluator:
         pos_all = np.sum(pos_denominator_mask)
         for cut in self.tagging_cuts:
             pos_passing_cut = np.sum(self.predicted[pos_denominator_mask] >= cut)
-            neg_passing_cut = np.sum(self.predicted[neg_denominator_mask] < cut)
+            # For negative charge, use (1 - score) so both charges are evaluated
+            # with the same "score >= threshold" convention. This ensures both
+            # ROC curves sweep from (1,1) to (0,0) and overlap for a symmetric classifier.
+            neg_passing_cut = np.sum(
+                (1 - self.predicted[neg_denominator_mask]) >= cut
+            )
             _eff_fake["positive"].append(pos_passing_cut / pos_all)
             _eff_fake["negative"].append(neg_passing_cut / neg_all)
         return _eff_fake, denominator_masks

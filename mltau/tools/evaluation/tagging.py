@@ -28,7 +28,6 @@ class TaggerEvaluator:
         cfg: DictConfig,
         sample: str,
         algorithm: str,
-        n_classifier_cuts: int = 200,
     ):
         self.signal_predictions = signal_predictions
         self.signal_gen_tau_p4 = g.reinitialize_p4(signal_gen_tau_p4)
@@ -40,7 +39,14 @@ class TaggerEvaluator:
         self.cfg = cfg
         self.sample = sample  # TODO: Actually not used anymore
         self.algorithm = algorithm
-        self.tagging_cuts = np.linspace(start=0, stop=1, num=n_classifier_cuts + 1)
+        # Use quantile-based thresholds: dense where scores concentrate (near 0/1),
+        # sparse in the middle. Capped at 1000 points for performance.
+        all_scores = np.concatenate(
+            [np.asarray(signal_predictions), np.asarray(bkg_predictions)]
+        )
+        self.tagging_cuts = np.unique(np.concatenate(
+            [[0], np.quantile(all_scores, np.linspace(0, 1, 1000)), [1]]
+        ))
 
         self.fakerates, self.fake_numerator_mask, self.fake_denominator_mask = (
             self._calculate_fakerates()

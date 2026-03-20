@@ -1,4 +1,4 @@
-output_dir: /home/laurits/20260317_updated_logging
+output_dir: /home/laurits/20260319_charge_id_logging_fix
 defaults:
     - _self_
     - metrics/metrics

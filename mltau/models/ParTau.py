@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from omegaconf import OmegaConf, DictConfig
 from mltau.models.ParticleTransformer import ParticleTransformer
 
 

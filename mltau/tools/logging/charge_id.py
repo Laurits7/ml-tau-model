@@ -16,8 +16,12 @@ def log_charge_id_performance(
     current_epoch: int,
     dataset="train",
 ):
-    predictions = predictions["charge"]
-    targets = targets["charge"]
+    # Charge is only meaningful for signal taus — exclude background jets
+    signal_mask = targets["is_tau"] == 1
+    predictions = predictions["charge"][signal_mask]
+    targets = targets["charge"][signal_mask]
+    gen_jet_tau_p4s = gen_jet_tau_p4s[signal_mask]
+    reco_jet_p4s = reco_jet_p4s[signal_mask]
 
     evaluator = c.ChargeIdEvaluator(
         predicted=predictions,
