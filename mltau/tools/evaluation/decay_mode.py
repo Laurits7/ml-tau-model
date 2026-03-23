@@ -198,5 +198,57 @@ class DecayModeEvaluator:
 # Example use:
 #     dm_evaluator = DecayModeEvaluator(true_classes, pred_classes, '/path/to/output')
 #     dm_evaluator.print_performance()
+
+
+class DecayModeROCPlot:
+    """ROC curve plot for decay mode classification.
+
+    For each decay mode class the class is treated as signal and all other
+    classes as background, then a ROC curve (TPR vs FPR) is drawn.
+    """
+
+    COLORS = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#a65628"]
+
+    def __init__(
+        self, predictions_proba: np.ndarray, targets: np.ndarray, categories: list
+    ):
+        """Args:
+        predictions_proba: (N, num_classes) softmax probability array.
+        targets: (N,) integer class-index array.
+        categories: list of class label strings in class-index order.
+        """
+        self.predictions_proba = np.asarray(predictions_proba)
+        self.targets = np.asarray(targets)
+        self.categories = categories
+        self.fig, self.ax = self._make_axes()
+        self._plot_roc_curves()
+
+    def _make_axes(self):
+        fig, ax = plt.subplots(figsize=(10, 10))
+        ax.set_xlabel("False Positive Rate", fontsize=20)
+        ax.set_ylabel("True Positive Rate", fontsize=20)
+        ax.tick_params(axis="both", labelsize=16)
+        ax.set_xlim((0, 1))
+        ax.set_ylim((0, 1))
+        ax.plot([0, 1], [0, 1], ls="--", color="grey", lw=1)
+        plt.grid()
+        return fig, ax
+
+    def _plot_roc_curves(self):
+        num_classes = self.predictions_proba.shape[1]
+        for cls_idx in range(num_classes):
+            binary_targets = (self.targets == cls_idx).astype(int)
+            if binary_targets.sum() == 0:
+                continue
+            fpr, tpr, _ = metrics.roc_curve(
+                binary_targets, self.predictions_proba[:, cls_idx]
+            )
+            auc = metrics.auc(fpr, tpr)
+            label = f"{self.categories[cls_idx]} (AUC={auc:.3f})"
+            color = self.COLORS[cls_idx % len(self.COLORS)]
+            self.ax.plot(fpr, tpr, label=label, color=color, lw=2)
+        self.ax.legend(prop={"size": 14}, loc="lower right")
+
+
 #     dm_evaluator.plot_confusion_matrix()
 #     dm_evaluator.save_performance()

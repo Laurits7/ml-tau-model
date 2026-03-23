@@ -5,6 +5,7 @@ from omegaconf import DictConfig
 
 from mltau.tools.general import reinitialize_p4
 from mltau.tools.evaluation import tagging as t
+from mltau.tools.evaluation.general import binary_classifier_metrics
 from mltau.tools.logging.general import log_metrics_dict
 
 
@@ -74,28 +75,19 @@ def log_all_tagging_metrics(
 
     # Scalar classification metrics at the medium WP threshold
     wp = tagger_evaluator.medium_wp
-    tp = float(np.sum(np.array(tagger_evaluator.signal_predictions) > wp))
-    fn = float(np.sum(np.array(tagger_evaluator.signal_predictions) <= wp))
-    tn = float(np.sum(np.array(tagger_evaluator.bkg_predictions) <= wp))
-    fp = float(np.sum(np.array(tagger_evaluator.bkg_predictions) > wp))
-    tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    tnr = tn / (tn + fp) if (tn + fp) > 0 else 0.0
-    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
-    fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall = tpr
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-    accuracy = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0.0
-    tagging_scalars = {
-        "TPR": tpr,
-        "TNR": tnr,
-        "FPR": fpr,
-        "FNR": fnr,
-        "precision": precision,
-        "recall": recall,
-        "F1": f1,
-        "accuracy": accuracy,
-    }
+    all_predictions = np.concatenate(
+        [
+            np.array(tagger_evaluator.signal_predictions),
+            np.array(tagger_evaluator.bkg_predictions),
+        ]
+    )
+    all_targets = np.concatenate(
+        [
+            np.ones(len(tagger_evaluator.signal_predictions)),
+            np.zeros(len(tagger_evaluator.bkg_predictions)),
+        ]
+    )
+    tagging_scalars = binary_classifier_metrics(all_predictions, all_targets, wp)
     log_metrics_dict(tb_logger, tagging_scalars, "tagging", current_epoch)
 
     # Now log all the plots
