@@ -109,10 +109,22 @@ class ParTauModule(L.LightningModule):
         charge_loss = self.charge_loss_fn(predictions["charge"], targets["charge"])
 
         # Kinematics
-        kinematics_loss = self.kinematics_loss_fn(
-            predictions["kinematics"], targets["kinematics"]
+        kin_pred = predictions["kinematics"]
+        kin_target = targets["kinematics"]
+
+        # Log-ratio terms: independent Huber in log space
+        log_pt_loss = self.kinematics_loss_fn(kin_pred[:, 0], kin_target[:, 0])
+        log_m_loss = self.kinematics_loss_fn(kin_pred[:, 3], kin_target[:, 3])
+
+        # Angle terms: combined deltaR-like Huber instead of two independent terms
+        delta_angle = torch.sqrt(
+            (kin_pred[:, 1] - kin_target[:, 1]) ** 2
+            + (kin_pred[:, 2] - kin_target[:, 2]) ** 2
+            + 1e-8
         )
-        kinematics_loss = kinematics_loss.mean(dim=-1)
+        angle_loss = self.kinematics_loss_fn(delta_angle, torch.zeros_like(delta_angle))
+
+        kinematics_loss = (log_pt_loss + angle_loss + log_m_loss) / 3.0
 
         combined_loss = (
             tau_id_loss
