@@ -36,9 +36,11 @@ class ChargeIdEvaluator:
         self.truth = truth
         # Use quantile-based thresholds: dense where scores concentrate (near 0/1),
         # sparse in the middle. Capped at 1000 points for performance.
-        self.tagging_cuts = np.unique(np.concatenate(
-            [[0], np.quantile(self.predicted, np.linspace(0, 1, 1000)), [1]]
-        ))
+        self.tagging_cuts = np.unique(
+            np.concatenate(
+                [[0], np.quantile(self.predicted, np.linspace(0, 1, 1000)), [1]]
+            )
+        )
         self.true_positive_charge_mask = self.truth == 1
         self.true_negative_charge_mask = self.truth == 0
         self.efficiencies, self.eff_denominator_masks = self._calculate_eff_fake(
@@ -49,7 +51,11 @@ class ChargeIdEvaluator:
         )
         self.pos_charge_predictions = self.predicted[self.true_positive_charge_mask]
         self.neg_charge_predictions = self.predicted[self.true_negative_charge_mask]
-        self.wp_value = 0.5
+        # Find the working point at the ROC-curve intersection (most symmetric
+        # operating point for both charges).
+        self.roc_intersection_idx = self._find_roc_intersection()
+        self.wp_pos = float(self.tagging_cuts[self.roc_intersection_idx])
+        self.wp_neg = float(1.0 - self.tagging_cuts[self.roc_intersection_idx])
         self.wp_metrics = {}
         for name, metric in cfg.metrics.charge.metrics.items():
             self.wp_metrics[name] = {}
@@ -120,9 +126,7 @@ class ChargeIdEvaluator:
             # For negative charge, use (1 - score) so both charges are evaluated
             # with the same "score >= threshold" convention. This ensures both
             # ROC curves sweep from (1,1) to (0,0) and overlap for a symmetric classifier.
-            neg_passing_cut = np.sum(
-                (1 - self.predicted[neg_denominator_mask]) >= cut
-            )
+            neg_passing_cut = np.sum((1 - self.predicted[neg_denominator_mask]) >= cut)
             _eff_fake["positive"].append(pos_passing_cut / pos_all)
             _eff_fake["negative"].append(neg_passing_cut / neg_all)
         return _eff_fake, denominator_masks
@@ -131,6 +135,28 @@ class ChargeIdEvaluator:
     ###################################
     ###################################
     ###################################
+
+    def _find_roc_intersection(self, target_efficiency: float = 0.95) -> int:
+        """Return the index into tagging_cuts for the working point.
+
+        If the positive and negative efficiency curves cross below
+        ``target_efficiency``, use the first such crossing.
+        Otherwise fall back to the index closest to ``target_efficiency``
+        on the positive-charge efficiency curve.
+        """
+        eff_pos = np.array(self.efficiencies["positive"])
+        eff_neg = np.array(self.efficiencies["negative"])
+
+        diff = eff_pos - eff_neg
+        # Only consider crossings that are strictly below the target efficiency
+        below_target = (eff_pos < target_efficiency) & (eff_neg < target_efficiency)
+        sign_changes = np.where(np.diff(np.sign(diff)))[0]
+        valid_crossings = [i for i in sign_changes if below_target[i]]
+
+        if valid_crossings:
+            return int(valid_crossings[0])
+
+        return int(np.argmin(np.abs(eff_pos - target_efficiency)))
 
     def _get_working_point_eff_fakes(self, name, metric, eff_fake="eff"):
         eff_fake_mask = (
@@ -144,9 +170,9 @@ class ChargeIdEvaluator:
             var_values = np.rad2deg(var_values)
         for charge in ["positive", "negative"]:
             if charge == "positive":
-                wp_mask = self.predicted > self.wp_value
+                wp_mask = self.predicted >= self.wp_pos
             else:
-                wp_mask = self.predicted < self.wp_value
+                wp_mask = self.predicted <= self.wp_neg
             eff_var_denom = var_values[eff_fake_mask[charge]]
             eff_var_num = var_values[wp_mask * eff_fake_mask[charge]]
             bin_edges = np.linspace(
@@ -248,6 +274,21 @@ class ROCPlot:
             ms=15,
             ls="",
         )
+        # Mark the ROC-intersection working point on both curves
+        idx = evaluator.roc_intersection_idx
+        for eff_key, fake_key, color in [
+            ("positive", "positive", "r"),
+            ("negative", "negative", "b"),
+        ]:
+            self.ax.plot(
+                evaluator.efficiencies[eff_key][idx],
+                evaluator.fakerates[fake_key][idx],
+                marker="*",
+                color=color,
+                ms=25,
+                zorder=5,
+                linestyle="",
+            )
         self.ax.legend(prop={"size": 30})
 
     def save(self, output_path):
