@@ -7,13 +7,23 @@ from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger  # , CometLog
 from lightning.pytorch.callbacks import TQDMProgressBar, ModelCheckpoint
 
 from mltau.tools.io import ParT_dataloader as dl
-from mltau.models import ParTau_module as pm
+from mltau.models import MultiParTau_module, SingleParTau_module
 
 
 @hydra.main(config_path="../config", config_name="main", version_base=None)
 def train(cfg: DictConfig):
     datamodule = dl.ParTDataModule(cfg=cfg, debug_run=cfg.training.debug_run)
-    model = pm.ParTauModule(cfg=cfg, input_dim=13, num_dm_classes=6)
+    model_name = cfg.training.model.name
+    if model_name == "MultiParTau":
+        model = MultiParTau_module.ParTauModule(cfg=cfg, input_dim=13, num_dm_classes=6)
+    elif model_name == "SingleParTau":
+        model = SingleParTau_module.ParTauModule(
+            cfg=cfg, input_dim=13, num_dm_classes=6, task=cfg.training.model.task
+        )
+    else:
+        raise ValueError(
+            f"Unknown model '{model_name}'. Choose 'MultiParTau' or 'SingleParTau'."
+        )
     models_dir = os.path.join(cfg.output_dir, "models")
     log_dir = os.path.join(cfg.output_dir, "logs")
     tb_log_dir = os.path.join(cfg.output_dir, "tensorboard")

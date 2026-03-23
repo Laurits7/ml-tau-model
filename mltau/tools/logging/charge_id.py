@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 from omegaconf import DictConfig
 
 from mltau.tools.evaluation import charge_id as c
+from mltau.tools.evaluation.general import binary_classifier_metrics
+from mltau.tools.logging.general import log_metrics_dict
 
 
 def log_charge_id_performance(
@@ -59,3 +61,11 @@ def log_charge_id_performance(
         fr_plot.add_line(evaluator)
         tb_logger.add_figure(f"charge_id/{metric}_fakerate", fr_plot.fig, current_epoch)
         plt.close(fr_plot.fig)
+
+    # Scalar classification metrics at the ROC-intersection working point
+    charge_scalars = binary_classifier_metrics(
+        evaluator.predicted, evaluator.truth, evaluator.wp_pos
+    )
+    charge_scalars["wp_pos"] = evaluator.wp_pos
+    charge_scalars["wp_neg"] = evaluator.wp_neg
+    log_metrics_dict(tb_logger, charge_scalars, "charge_id", current_epoch)
