@@ -73,7 +73,7 @@ class ParTau(ParticleTransformer):
         elif self.task == "kinematics":
             # Regression head kinematic reconstruction [pT_vis, theta, phi, m_vis]
             self.regression_head = nn.Linear(embed_dim, 4)
-        elif self.task == "tagging" or self.task == "tagging":
+        elif self.task == "is_tau" or self.task == "charge":
             # Binary heads for tau-tagging and charge reco
             self.binary_head = nn.Linear(embed_dim, 1)
         else:
@@ -134,7 +134,7 @@ class ParTau(ParticleTransformer):
             elif self.task == "kinematics":
                 # Regression head kinematic reconstruction [pT_vis, theta, phi, m_vis]
                 output = (self.regression_head(x_cls),)  # (N, 4)
-            elif self.task == "tagging" or self.task == "tagging":
+            elif self.task == "is_tau" or self.task == "charge":
                 # Binary heads for tau-tagging and charge reco
                 output = (torch.sigmoid(self.binary_head(x_cls)).squeeze(-1),)  # (N,)
             else:
