@@ -262,7 +262,7 @@ class ROCPlot:
             color="r",
             marker="s",
             label=r"$\tau^{+}$",
-            ms=15,
+            ms=8,
             ls="",
         )
         self.ax.plot(
@@ -271,7 +271,7 @@ class ROCPlot:
             color="b",
             marker="^",
             label=r"$\tau^{-}$",
-            ms=15,
+            ms=8,
             ls="",
         )
         # Mark the ROC-intersection working point on both curves

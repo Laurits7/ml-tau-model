@@ -52,6 +52,13 @@ class ParTauModule(L.LightningModule):
         )
         for key, value in metrics.items():
             self.training_loss_accumulator[key].append(value.detach())
+        self.log(
+            "train/lr",
+            self.optimizers().param_groups[0]["lr"],
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+        )
         inputs = BatchInputs(*batch)
         if batch_idx % 10 == 0:
             self.training_outputs.append(
@@ -80,10 +87,10 @@ class ParTauModule(L.LightningModule):
         )
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            T_max=20000 * self.cfg.training.trainer.max_epochs,
+            T_max=self.trainer.estimated_stepping_batches,
             eta_min=self.cfg.training.lr * 0.01,
         )
-        return [optimizer], [lr_scheduler]
+        return [optimizer], [{"scheduler": lr_scheduler, "interval": "step"}]
 
     def forward(self, batch):
         inputs = BatchInputs(*batch)

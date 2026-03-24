@@ -1,6 +1,7 @@
 dataset:
   max_cands: 20
-  data_dir: /scratch/persistent/norman/ml-tau/cld/v1.2.3_key4hep_2025-05-29_CLD_f1e8f9/260206/
+  # data_dir: /scratch/persistent/norman/ml-tau/cld/v1.2.3_key4hep_2025-05-29_CLD_f1e8f9/260319_365/
+  data_dir: /scratch/persistent/norman/ml-tau/cld/v1.2.3_key4hep_2025-05-29_CLD_f1e8f9/260319_91/
   relative_sizes:
     train: 0.7
     val: 0.1

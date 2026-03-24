@@ -29,12 +29,6 @@ class ParTauModule(L.LightningModule):
             use_amp=False,
             metric="eta-phi",
         )
-        self.tagging_loss_fn = SigmoidFocalLoss(
-            alpha=0.25, gamma=2.0, reduction="none"
-        )  # class imbalance
-        self.charge_loss_fn = SigmoidFocalLoss(reduction="none")  # class balance
-        self.decay_mode_loss_fn = nn.CrossEntropyLoss(reduction="none")
-        self.kinematics_loss_fn = nn.HuberLoss(reduction="none", delta=1.0)
 
     def training_step(self, batch, batch_idx):
         predictions, targets, weights = self.forward(batch)
@@ -43,6 +37,13 @@ class ParTauModule(L.LightningModule):
         )
         for key, value in metrics.items():
             self.training_loss_accumulator[key].append(value.detach())
+        self.log(
+            "train/lr",
+            self.optimizers().param_groups[0]["lr"],
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+        )
         inputs = BatchInputs(*batch)
         if batch_idx % 10 == 0:  # Store every 10th batch to save memory
             output = {
@@ -74,13 +75,10 @@ class ParTauModule(L.LightningModule):
         #     optimizer = Lookahead(base_optimizer=optimizer, k=6, alpha=0.5)
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            T_max=20000 * self.cfg.training.trainer.max_epochs,
-            # T_max=len(dataloader_train) * cfg.training.num_epochs,
+            T_max=self.trainer.estimated_stepping_batches,
             eta_min=self.cfg.training.lr * 0.01,
         )
-        # LR remains constant for the first 70% of iterations, then decays exponentially at an
-        # interval of every 20k iterations down to 1% of the inital value at the end of the training
-        return [optimizer], [lr_scheduler]
+        return [optimizer], [{"scheduler": lr_scheduler, "interval": "step"}]
 
     def forward(self, batch):
         """Both `predictions` and `targets` are defined for the multiple heads"""
@@ -94,50 +92,83 @@ class ParTauModule(L.LightningModule):
         )
         return predictions, inputs.target, inputs.weight
 
-    def calculate_metrics(self, targets, predictions, weights):
+    def charge_loss_fn(self, predictions, targets):
+        loss_fn = SigmoidFocalLoss(reduction="none")  # class balance
+        return loss_fn(predictions, targets)
 
-        # TODO: Account for weights.
+    def tagging_loss_fn(self, predictions, targets):
+        loss_fn = SigmoidFocalLoss(
+            alpha=0.25, gamma=2.0, reduction="none"
+        )  # class imbalance
+        return loss_fn(predictions, targets)
 
-        decay_mode_loss = self.decay_mode_loss_fn(
-            predictions["decay_mode"], targets["decay_mode"]  # miks siin pole squeeze?
-        )
+    def decay_mode_loss_fn(self, predictions, targets):
+        loss_fn = nn.CrossEntropyLoss(reduction="none")
+        return loss_fn(predictions, targets)
 
-        # Tau ID
-        tau_id_loss = self.tagging_loss_fn(predictions["is_tau"], targets["is_tau"])
-
-        # Charge
-        charge_loss = self.charge_loss_fn(predictions["charge"], targets["charge"])
-
-        # Kinematics
-        kin_pred = predictions["kinematics"]
-        kin_target = targets["kinematics"]
-
+    def kinematics_loss_fn(self, predictions, targets):
+        loss_fn = nn.HuberLoss(reduction="none", delta=1.0)
         # Log-ratio terms: independent Huber in log space
-        log_pt_loss = self.kinematics_loss_fn(kin_pred[:, 0], kin_target[:, 0])
-        log_m_loss = self.kinematics_loss_fn(kin_pred[:, 3], kin_target[:, 3])
-
+        log_pt_loss = loss_fn(predictions[:, 0], targets[:, 0])
+        log_m_loss = loss_fn(predictions[:, 3], targets[:, 3])
         # Angle terms: combined deltaR-like Huber instead of two independent terms
         delta_angle = torch.sqrt(
-            (kin_pred[:, 1] - kin_target[:, 1]) ** 2
-            + (kin_pred[:, 2] - kin_target[:, 2]) ** 2
+            (predictions[:, 1] - targets[:, 1]) ** 2
+            + (predictions[:, 2] - targets[:, 2]) ** 2
             + 1e-8
         )
-        angle_loss = self.kinematics_loss_fn(delta_angle, torch.zeros_like(delta_angle))
+        angle_loss = loss_fn(delta_angle, torch.zeros_like(delta_angle))
+        return (log_pt_loss + angle_loss + log_m_loss) / 3.0
 
-        kinematics_loss = (log_pt_loss + angle_loss + log_m_loss) / 3.0
+    def calculate_metrics(
+        self, targets, predictions, weights, w_kin=1, w_dm=1, w_tag=1, w_charge=1
+    ):
+        # TODO: Account for weights.
+        is_tau_mask = targets["is_tau"].bool()
+        # Tau ID
+        tau_id_loss = self.tagging_loss_fn(
+            predictions["is_tau"], targets["is_tau"]
+        ).mean()
+
+        if not is_tau_mask.any():
+            # Pure-background batch (e.g. entire qq row group): signal-only losses undefined
+            zero = tau_id_loss.new_zeros(())
+            return {
+                "tau_id_loss": tau_id_loss,
+                "charge_loss": zero,
+                "decay_mode_loss": zero,
+                "kinematics_loss": zero,
+                "loss": tau_id_loss,
+            }
+
+        # Decay mode
+        decay_mode_loss = self.decay_mode_loss_fn(
+            predictions["decay_mode"][is_tau_mask], targets["decay_mode"][is_tau_mask]
+        ).mean()
+
+        # Charge
+        charge_loss = self.charge_loss_fn(
+            predictions["charge"][is_tau_mask], targets["charge"][is_tau_mask]
+        ).mean()
+
+        # Kinematics
+        kinematics_loss = self.kinematics_loss_fn(
+            predictions["kinematics"][is_tau_mask], targets["kinematics"][is_tau_mask]
+        ).mean()
 
         combined_loss = (
-            tau_id_loss
-            + (decay_mode_loss + charge_loss + kinematics_loss) * targets["is_tau"]
+            w_tag * tau_id_loss
+            + w_dm * decay_mode_loss
+            + w_charge * charge_loss
+            + w_kin * kinematics_loss
         )  # Here use all losses only if signal sample.
 
-        is_tau_mask = targets["is_tau"].bool()
         metrics = {
-            "tau_id_loss": tau_id_loss.mean(),
-            "charge_loss": charge_loss[is_tau_mask].mean(),
-            "decay_mode_loss": decay_mode_loss[is_tau_mask].mean(),
-            "kinematics_loss": kinematics_loss[is_tau_mask].mean(),
-            "loss": combined_loss.mean(),
+            "tau_id_loss": tau_id_loss,
+            "charge_loss": charge_loss,
+            "decay_mode_loss": decay_mode_loss,
+            "kinematics_loss": kinematics_loss,
+            "loss": combined_loss,
         }
 
         # TODO: Calculate additional metrics
