@@ -68,4 +68,4 @@ def log_charge_id_performance(
     )
     charge_scalars["wp_pos"] = evaluator.wp_pos
     charge_scalars["wp_neg"] = evaluator.wp_neg
-    log_metrics_dict(tb_logger, charge_scalars, "charge_id", current_epoch)
+    log_metrics_dict(tb_logger, charge_scalars, f"charge_id/{dataset}", current_epoch)

@@ -26,6 +26,9 @@ class ParticleTransformerDataset(IterableDataset):
         self.device = device
         print(f"There are {'{:,}'.format(self.num_rows)} jets in the dataset.")
 
+    def __len__(self):
+        return self.num_rows
+
     def _pad_and_convert_to_tensor(
         self, ak_array, dtype=torch.float32, fill_value=0, unsqueeze_dim=None
     ):
@@ -56,8 +59,11 @@ class ParticleTransformerDataset(IterableDataset):
         eps = 1e-6
         cand_features = ak.Array(
             {
-                "cand_deta": f.deltaEta(jet_constituent_p4s.eta, jet_p4s.eta),
-                "cand_dphi": f.deltaPhi(jet_constituent_p4s.phi, jet_p4s.phi),
+                # Original unsigned angular features:
+                # "cand_deta": f.deltaEta(jet_constituent_p4s.eta, jet_p4s.eta),
+                # "cand_dphi": f.deltaPhi(jet_constituent_p4s.phi, jet_p4s.phi),
+                "cand_deta": f.signedDeltaEta(jet_constituent_p4s.eta, jet_p4s.eta),
+                "cand_dphi": f.signedDeltaPhi(jet_constituent_p4s.phi, jet_p4s.phi),
                 "cand_logpt": np.log(np.maximum(jet_constituent_p4s.pt, eps)),
                 "cand_loge": np.log(np.maximum(jet_constituent_p4s.energy, eps)),
                 "cand_logptrel": np.log(
@@ -116,25 +122,46 @@ class ParticleTransformerDataset(IterableDataset):
         ).long()
 
         charge_tensor = (torch.tensor(ak.to_numpy(data.gen_jet_tau_charge)) == 1).long()
+        charge_tensor_enreg = (
+            torch.tensor(ak.to_numpy(data.gen_jet_tau_charge)) != -1
+        ).long()
 
-        dtheta = f.deltaPhi(gen_jet_tau_p4s.theta, jet_p4s.theta)
-        dphi = f.deltaPhi(gen_jet_tau_p4s.phi, jet_p4s.phi)
-        # Add epsilon and clamp to avoid log(0) or log(negative)
-        vis_pt_ratio = torch.tensor(gen_jet_tau_p4s.pt / jet_p4s.pt)
+        # Original target definition kept for reference:
+        # dtheta = f.deltaPhi(gen_jet_tau_p4s.theta, jet_p4s.theta)
+        # dphi = f.deltaPhi(gen_jet_tau_p4s.phi, jet_p4s.phi)
+        # vis_pt_ratio = torch.tensor(gen_jet_tau_p4s.pt / jet_p4s.pt)
+        # vis_pt_ratio_safe = torch.clamp(vis_pt_ratio, min=eps)
+        # vis_m_ratio = torch.tensor(gen_jet_tau_p4s.mass / jet_p4s.mass)
+        # vis_m_ratio_safe = torch.clamp(vis_m_ratio, min=eps)
+        # kinematics_tensor = torch.stack(
+        #     [
+        #         torch.log(vis_pt_ratio_safe),
+        #         torch.tensor(dtheta),
+        #         torch.tensor(dphi),
+        #         torch.log(vis_m_ratio_safe),
+        #     ],
+        #     dim=-1,
+        # )
+
+        delta_eta = torch.tensor(ak.to_numpy(gen_jet_tau_p4s.eta - jet_p4s.eta), dtype=torch.float32)
+        delta_phi = torch.tensor(
+            ak.to_numpy(f.signedDeltaPhi(gen_jet_tau_p4s.phi, jet_p4s.phi)),
+            dtype=torch.float32,
+        )
+        vis_pt_ratio = torch.tensor(gen_jet_tau_p4s.pt / jet_p4s.pt, dtype=torch.float32)
         vis_pt_ratio_safe = torch.clamp(vis_pt_ratio, min=eps)
 
-        vis_m_ratio = torch.tensor(gen_jet_tau_p4s.mass / jet_p4s.mass)
-        vis_m_ratio_safe = torch.clamp(vis_m_ratio, min=eps)
-        # Stack kinematic variables into a single tensor [N, 4] for [pT_vis, theta, phi, m_vis]
+        # Updated target definition for the first kinematics-only test:
+        # [log(pt_gen/pt_reco), delta_eta, sin(delta_phi), cos(delta_phi)]
         kinematics_tensor = torch.stack(
             [
-                torch.log(vis_pt_ratio_safe),  # pT_vis (log of pT ratio) - safe version
-                torch.tensor(dtheta),  # delta theta between gen_vis_tau and reco_jet
-                torch.tensor(dphi),  # delta phi  between gen_vis_tau and reco_jet
-                torch.log(vis_m_ratio_safe),  # m_vis
+                torch.log(vis_pt_ratio_safe),
+                delta_eta,
+                torch.sin(delta_phi),
+                torch.cos(delta_phi),
             ],
             dim=-1,
-        )  # Stack along last dimension to get [N, 4]
+        )
 
         # Pad and convert cand_kinematics to tensor
         cand_kinematics_tensor = torch.stack(
@@ -173,6 +200,7 @@ class ParticleTransformerDataset(IterableDataset):
                 "kinematics": kinematics_tensor.float(),
                 "decay_mode": gen_jet_tau_decaymode_ohe.float(),
                 "charge": charge_tensor.long(),
+                "charge_enreg": charge_tensor_enreg.long(),
                 "is_tau": gen_jet_tau_decaymode_exists.long(),
             },
             mask,
@@ -241,7 +269,9 @@ class ParTDataModule(LightningDataModule):
 
         """
         self.cfg = cfg
+        use_bkg = (cfg.training.model.task == "is_tau") or (cfg.training.model.name == "MultiParTau")
         self.debug_run = debug_run
+        self.sample = "z" if not use_bkg else "*"
         self.device = device
         self.train_loader = None
         self.test_loader = None
@@ -255,7 +285,7 @@ class ParTDataModule(LightningDataModule):
 
     def get_dataset_rowgroups(self, dataset_type: str):
         if dataset_type == "test":
-            test_paths_wcp = os.path.join(self.cfg.dataset.data_dir, "*_test.parquet")
+            test_paths_wcp = os.path.join(self.cfg.dataset.data_dir, f"{self.sample}_test.parquet")
             test_paths = list(glob.glob(test_paths_wcp))
             test_rowgroups = ig.get_row_groups(input_paths=test_paths)
             np.random.shuffle(test_rowgroups)
@@ -271,7 +301,7 @@ class ParTDataModule(LightningDataModule):
                 dataset: self.cfg.dataset.relative_sizes[dataset] / total
                 for dataset in ["train", "val"]
             }
-            train_paths_wcp = os.path.join(self.cfg.dataset.data_dir, "*_train.parquet")
+            train_paths_wcp = os.path.join(self.cfg.dataset.data_dir, f"{self.sample}_train.parquet")
             train_paths = list(glob.glob(train_paths_wcp))
             all_train_rowgroups = ig.get_row_groups(input_paths=train_paths)
             np.random.shuffle(all_train_rowgroups)

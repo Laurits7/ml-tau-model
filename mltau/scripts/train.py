@@ -36,11 +36,17 @@ def train(cfg: DictConfig):
         TQDMProgressBar(refresh_rate=1000),
         ModelCheckpoint(
             dirpath=models_dir,
-            monitor="val_losses/loss",
-            mode="min",
             save_top_k=-1,
             save_weights_only=True,
-            filename="ParT-{epoch:02d}-{val_loss:.2f}",
+            filename="ParT-{epoch:02d}",
+        ),
+        ModelCheckpoint(
+            dirpath=models_dir,
+            monitor="val_losses/loss",
+            mode="min",
+            save_top_k=1,
+            save_weights_only=True,
+            filename="ParT-model_best",
         ),
     ]
 
