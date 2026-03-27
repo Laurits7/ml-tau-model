@@ -1,4 +1,4 @@
-output_dir: /home/laurits/20260323_test
+output_dir: /home/norman/ml-tau/training_outputs/260325
 defaults:
     - _self_
     - metrics/metrics
