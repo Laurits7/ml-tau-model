@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 import awkward as ak
 import torch.nn as nn
 import lightning as L
@@ -32,19 +33,24 @@ class ParTauModule(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         predictions, targets, weights = self.forward(batch)
+
+        # Calculate baseline charges and store them
+        inputs = BatchInputs(*batch)
+        baseline_charges = self._calculate_baseline_charges(inputs)
+
         metrics = self.calculate_metrics(
             targets=targets, predictions=predictions, weights=weights
         )
         for key, value in metrics.items():
             self.training_loss_accumulator[key].append(value.detach())
         self.log(
-            "train/lr",
+            "LR",
             self.optimizers().param_groups[0]["lr"],
             on_step=True,
             on_epoch=False,
             prog_bar=True,
         )
-        inputs = BatchInputs(*batch)
+
         if batch_idx % 10 == 0:  # Store every 10th batch to save memory
             output = {
                 "predictions": predictions,
@@ -53,6 +59,7 @@ class ParTauModule(L.LightningModule):
                 "gen_jet_p4s": inputs.gen_jet_p4s,
                 "reco_jet_p4s": inputs.reco_jet_p4s,
                 "gen_jet_tau_p4s": inputs.gen_jet_tau_p4s,
+                "baseline_charges": baseline_charges,
             }
             self.training_outputs.append(output)
         return metrics["loss"]
@@ -73,12 +80,97 @@ class ParTauModule(L.LightningModule):
         )
         # if self.cfg.training.optimizer.use_lookahead:
         #     optimizer = Lookahead(base_optimizer=optimizer, k=6, alpha=0.5)
+
+        # Use a more reliable method to calculate T_max
+        # Check if estimated_stepping_batches is available and valid
+        estimated_steps = getattr(self.trainer, "estimated_stepping_batches", None)
+
+        if estimated_steps is None or estimated_steps <= 0:
+            # Fallback: calculate based on config (will be approximate but functional)
+            max_epochs = self.cfg.training.trainer.max_epochs
+            # Use a conservative estimate of steps per epoch
+            # This will be less precise but the scheduler will still work
+            estimated_steps_per_epoch = 500  # Reasonable default for most datasets
+            T_max = max_epochs * estimated_steps_per_epoch
+            print(
+                f"Warning: Using estimated T_max={T_max} (estimated_stepping_batches not available)"
+            )
+        else:
+            T_max = estimated_steps
+            print(f"Using calculated T_max={T_max} from estimated_stepping_batches")
+
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            T_max=self.trainer.estimated_stepping_batches,
+            T_max=T_max,
             eta_min=self.cfg.training.lr * 0.01,
         )
         return [optimizer], [{"scheduler": lr_scheduler, "interval": "step"}]
+
+    def _calculate_baseline_charges(self, inputs):
+        """Calculate baseline jet charge using Q*kappa weighting."""
+        # Extract candidate data
+        cand_charges = inputs.cand_features[:, 8, :]  # Feature index 8 is charge
+        cand_mask = inputs.cand_mask[:, 0, :]  # Remove singleton dimension
+
+        # Calculate candidate pTs from px, py
+        px = inputs.cand_kinematics_pxpypze[:, 0, :]
+        py = inputs.cand_kinematics_pxpypze[:, 1, :]
+        cand_pts = torch.sqrt(px**2 + py**2)
+
+        # Get jet pTs - first convert dict to awkward array, then reinitialize p4
+        import awkward as ak
+        from mltau.tools import general as g
+
+        try:
+            # Convert dict to awkward array
+            reco_jet_p4s_ak = ak.Array(inputs.reco_jet_p4s)
+            reco_jet_p4s = g.reinitialize_p4(reco_jet_p4s_ak)
+
+            # Handle different shapes/types for reco_jet_p4s.pt
+            pt_values = reco_jet_p4s.pt
+
+            # Convert awkward array to numpy first, then to tensor
+            if hasattr(pt_values, "to_numpy"):
+                pt_numpy = pt_values.to_numpy()
+            else:
+                pt_numpy = ak.to_numpy(pt_values)
+
+            # Ensure it's a 1D array matching batch size
+            if pt_numpy.ndim == 0:  # Scalar case
+                pt_numpy = np.array([pt_numpy])
+            elif pt_numpy.ndim > 1:  # Multi-dimensional case
+                pt_numpy = pt_numpy.flatten()[: len(cand_charges)]
+
+            jet_pts = torch.tensor(
+                pt_numpy, dtype=torch.float32, device=cand_charges.device
+            )
+
+            # Ensure jet_pts has same batch size as cand_charges
+            if len(jet_pts) != len(cand_charges):
+                # Repeat or truncate to match batch size
+                if len(jet_pts) == 1:
+                    jet_pts = jet_pts.repeat(len(cand_charges))
+                else:
+                    jet_pts = jet_pts[: len(cand_charges)]
+
+        except Exception as e:
+            print(f"Warning: Error processing reco_jet_p4s.pt: {e}")
+            # Fallback: use candidate pT sum as jet pT estimate
+            jet_pts = torch.sum(cand_pts * cand_mask, dim=1)
+            print(f"Using fallback jet pT calculation with shape: {jet_pts.shape}")
+
+        # Mask out padded candidates
+        cand_charges_masked = cand_charges * cand_mask
+        cand_pts_masked = cand_pts * cand_mask
+
+        # Calculate weighted charge (kappa=0.2)
+        kappa = 0.2
+        numer = torch.sum(cand_charges_masked * (cand_pts_masked**kappa), dim=1)
+        denom = jet_pts**kappa
+        denom = torch.where(denom == 0, torch.ones_like(denom), denom)
+
+        baseline_charges = numer / denom
+        return baseline_charges.detach().cpu().numpy()
 
     def forward(self, batch):
         """Both `predictions` and `targets` are defined for the multiple heads"""
@@ -93,7 +185,9 @@ class ParTauModule(L.LightningModule):
         return predictions, inputs.target, inputs.weight
 
     def charge_loss_fn(self, predictions, targets):
-        loss_fn = SigmoidFocalLoss(reduction="none")  # class balance
+        loss_fn = SigmoidFocalLoss(
+            reduction="none", gamma=0.0, alpha=0.5
+        )  # class balance, so one could use BCE with sigmoid also.
         return loss_fn(predictions, targets)
 
     def tagging_loss_fn(self, predictions, targets):
@@ -177,10 +271,15 @@ class ParTauModule(L.LightningModule):
 
     def validation_step(self, batch, _batch_idx):
         predictions, targets, weights = self.forward(batch)
+
+        # Calculate baseline charges and store them
+        inputs = BatchInputs(*batch)
+        baseline_charges = self._calculate_baseline_charges(inputs)
+
         metrics = self.calculate_metrics(
             targets=targets, predictions=predictions, weights=weights
         )
-        inputs = BatchInputs(*batch)
+
         output = {
             "predictions": predictions,
             "targets": targets,
@@ -188,6 +287,7 @@ class ParTauModule(L.LightningModule):
             "gen_jet_p4s": inputs.gen_jet_p4s,
             "reco_jet_p4s": inputs.reco_jet_p4s,
             "gen_jet_tau_p4s": inputs.gen_jet_tau_p4s,
+            "baseline_charges": baseline_charges,
         }
         self.validation_outputs.append(output)
         for key, value in metrics.items():
@@ -224,6 +324,7 @@ class ParTauModule(L.LightningModule):
             all_gen_jet_p4s = {}
             all_gen_jet_tau_p4s = {}
             all_reco_jet_p4s = {}
+            all_baseline_charges = []
 
             for output in dataset_outputs:
                 # Concatenate predictions for each head
@@ -255,6 +356,9 @@ class ParTauModule(L.LightningModule):
                         all_gen_jet_tau_p4s[key] = []
                     all_gen_jet_tau_p4s[key].append(ak.Array(value.detach().cpu()))
 
+                # Collect baseline charges
+                all_baseline_charges.append(output["baseline_charges"])
+
                 # Concatenate weights
                 # all_weights.append(output["weights"].detach().cpu())
 
@@ -277,6 +381,9 @@ class ParTauModule(L.LightningModule):
             reco_jet_p4s = ak.Array(all_reco_jet_p4s)
             gen_jet_tau_p4s = ak.Array(all_gen_jet_tau_p4s)
 
+            # Concatenate baseline charges
+            all_baseline_charges = np.concatenate(all_baseline_charges, axis=0)
+
             # all_weights = ak.concatenate(all_weights, dim=0)
 
             # Log comprehensive metrics with full validation dataset
@@ -292,6 +399,7 @@ class ParTauModule(L.LightningModule):
                 tb_logger=tb_logger,
                 current_epoch=current_epoch,
                 dataset=dataset,
+                baseline_charges=all_baseline_charges,
             )
 
             # Clear outputs to free memory

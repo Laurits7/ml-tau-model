@@ -14,6 +14,7 @@ def log_all(
     tb_logger,
     current_epoch: int,
     dataset="train",
+    baseline_charges: np.array = None,
 ):
     tagging.log_all_tagging_metrics(
         targets=targets,
@@ -51,4 +52,5 @@ def log_all(
         tb_logger=tb_logger,
         current_epoch=current_epoch,
         dataset=dataset,
+        baseline_charges=baseline_charges,
     )
