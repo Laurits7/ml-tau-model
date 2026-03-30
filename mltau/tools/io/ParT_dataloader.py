@@ -177,7 +177,7 @@ class ParticleTransformerDataset(IterableDataset):
             },
             mask,
             weight_tensors.float(),
-            gen_jet_p4s,
+            gen_jet_tau_p4s,
             jet_p4s,
             gen_jet_p4s,
         )
