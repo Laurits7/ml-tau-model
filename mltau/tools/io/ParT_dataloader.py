@@ -222,7 +222,7 @@ class ParticleTransformerDataset(IterableDataset):
                         field: tensors[6][field][ijet] for field in tensors[6].fields
                     },  # reco_jet_p4s
                     {
-                        field: tensors[7][field][ijet] for field in tensors[6].fields
+                        field: tensors[7][field][ijet] for field in tensors[7].fields
                     },  # gen_jet_p4s
                 )
 
@@ -241,7 +241,11 @@ class ParTDataModule(LightningDataModule):
 
         """
         self.cfg = cfg
+        use_bkg = (cfg.training.model.task == "is_tau") or (
+            cfg.training.model.name == "MultiParTau"
+        )
         self.debug_run = debug_run
+        self.sample = "z" if not use_bkg else "*"
         self.device = device
         self.train_loader = None
         self.test_loader = None
@@ -255,7 +259,9 @@ class ParTDataModule(LightningDataModule):
 
     def get_dataset_rowgroups(self, dataset_type: str):
         if dataset_type == "test":
-            test_paths_wcp = os.path.join(self.cfg.dataset.data_dir, "*_test.parquet")
+            test_paths_wcp = os.path.join(
+                self.cfg.dataset.data_dir, f"{self.sample}_test.parquet"
+            )
             test_paths = list(glob.glob(test_paths_wcp))
             test_rowgroups = ig.get_row_groups(input_paths=test_paths)
             np.random.shuffle(test_rowgroups)
@@ -271,7 +277,9 @@ class ParTDataModule(LightningDataModule):
                 dataset: self.cfg.dataset.relative_sizes[dataset] / total
                 for dataset in ["train", "val"]
             }
-            train_paths_wcp = os.path.join(self.cfg.dataset.data_dir, "*_train.parquet")
+            train_paths_wcp = os.path.join(
+                self.cfg.dataset.data_dir, f"{self.sample}_train.parquet"
+            )
             train_paths = list(glob.glob(train_paths_wcp))
             all_train_rowgroups = ig.get_row_groups(input_paths=train_paths)
             np.random.shuffle(all_train_rowgroups)

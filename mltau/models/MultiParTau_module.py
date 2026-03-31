@@ -106,6 +106,34 @@ class ParTauModule(L.LightningModule):
         )
         return [optimizer], [{"scheduler": lr_scheduler, "interval": "step"}]
 
+    def _convert_logits_to_predictions(self, logits_dict):
+        """Convert model logits to probabilities/predictions for evaluation and logging."""
+        predictions = {}
+
+        # Convert awkward arrays to tensors if needed, apply activations, then convert back
+        for key, logits in logits_dict.items():
+            # Convert awkward array to tensor if necessary
+            if hasattr(logits, "to_numpy"):  # awkward array
+                logits_tensor = torch.from_numpy(ak.to_numpy(logits))
+            else:  # already a tensor
+                logits_tensor = logits
+
+            # Apply appropriate activation
+            if key in ["is_tau", "charge"]:  # Binary classification heads
+                pred_tensor = torch.sigmoid(logits_tensor)
+            elif key == "decay_mode":  # Multiclass classification
+                pred_tensor = torch.softmax(logits_tensor, dim=-1)
+            else:  # Regression (kinematics)
+                pred_tensor = logits_tensor
+
+            # Convert back to awkward array to match the expected format
+            if hasattr(logits, "to_numpy"):  # Input was awkward array
+                predictions[key] = ak.from_numpy(pred_tensor.detach().cpu().numpy())
+            else:  # Input was tensor
+                predictions[key] = pred_tensor
+
+        return predictions
+
     def _calculate_baseline_charges(self, inputs):
         """Calculate baseline jet charge using Q*kappa weighting."""
         # Extract candidate data
@@ -192,7 +220,7 @@ class ParTauModule(L.LightningModule):
 
     def tagging_loss_fn(self, predictions, targets):
         loss_fn = SigmoidFocalLoss(
-            alpha=0.25, gamma=2.0, reduction="none"
+            alpha=0.75, gamma=2.0, reduction="none"
         )  # class imbalance
         return loss_fn(predictions, targets)
 
@@ -367,6 +395,11 @@ class ParTauModule(L.LightningModule):
                 all_predictions[key] = ak.concatenate(all_predictions[key], axis=0)
             for key in all_targets:
                 all_targets[key] = ak.concatenate(all_targets[key], axis=0)
+
+            # Convert logits to probabilities for logging (evaluation functions expect probabilities)
+            all_predictions_for_logging = self._convert_logits_to_predictions(
+                all_predictions
+            )
             for key in all_gen_jet_p4s:
                 all_gen_jet_p4s[key] = ak.concatenate(all_gen_jet_p4s[key], axis=0)
             for key in all_reco_jet_p4s:
@@ -394,7 +427,7 @@ class ParTauModule(L.LightningModule):
                 gen_jet_p4s=gen_jet_p4s,
                 gen_jet_tau_p4s=gen_jet_tau_p4s,
                 reco_jet_p4s=reco_jet_p4s,
-                predictions=all_predictions,
+                predictions=all_predictions_for_logging,  # Use probabilities for logging
                 cfg=self.cfg,
                 tb_logger=tb_logger,
                 current_epoch=current_epoch,

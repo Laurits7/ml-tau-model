@@ -33,7 +33,7 @@ class ParTauModule(L.LightningModule):
         if task == "is_tau":
             self.loss_fn = SigmoidFocalLoss(alpha=0.25, gamma=2.0, reduction="none")
         elif task == "charge":
-            self.loss_fn = SigmoidFocalLoss(reduction="none")
+            self.loss_fn = nn.CrossEntropyLoss(reduction="none")
         elif task == "decay_mode":
             self.loss_fn = nn.CrossEntropyLoss(reduction="none")
         elif task == "kinematics":
@@ -43,7 +43,19 @@ class ParTauModule(L.LightningModule):
         return f"{self.task}_loss"
 
     def _make_accumulator(self):
-        return {key: [] for key in ["loss", self._loss_key()]}
+        # Original aggregate-only accumulator kept for reference.
+        # return {key: [] for key in ["loss", self._loss_key()]}
+        keys = ["loss", self._loss_key()]
+        if self.task == "kinematics":
+            keys.extend(
+                [
+                    "kinematics_log_pt_loss",
+                    "kinematics_delta_eta_loss",
+                    "kinematics_sin_delta_phi_loss",
+                    "kinematics_cos_delta_phi_loss",
+                ]
+            )
+        return {key: [] for key in keys}
 
     def training_step(self, batch, batch_idx):
         predictions, targets, weights = self.forward(batch)
@@ -52,13 +64,6 @@ class ParTauModule(L.LightningModule):
         )
         for key, value in metrics.items():
             self.training_loss_accumulator[key].append(value.detach())
-        self.log(
-            "train/lr",
-            self.optimizers().param_groups[0]["lr"],
-            on_step=True,
-            on_epoch=False,
-            prog_bar=True,
-        )
         inputs = BatchInputs(*batch)
         if batch_idx % 10 == 0:
             self.training_outputs.append(
@@ -79,18 +84,32 @@ class ParTauModule(L.LightningModule):
         return self.forward(batch)[0]
 
     def configure_optimizers(self):
-        optimizer = torch.optim.RAdam(
+        optimizer = torch.optim.AdamW(
             params=self.ParTau.parameters(),
             lr=self.cfg.training.lr,
-            betas=(0.95, 0.999),
-            eps=1e-5,
         )
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            T_max=self.trainer.estimated_stepping_batches,
+            T_max=len(self.trainer.datamodule.train_dataloader())
+            * self.cfg.training.trainer.max_epochs,
             eta_min=self.cfg.training.lr * 0.01,
         )
-        return [optimizer], [{"scheduler": lr_scheduler, "interval": "step"}]
+        return [optimizer], [lr_scheduler]
+
+    
+    # def configure_optimizers(self):
+    #     optimizer = torch.optim.RAdam(
+    #         params=self.ParTau.parameters(),
+    #         lr=self.cfg.training.lr,
+    #         betas=(0.95, 0.999),
+    #         eps=1e-5,
+    #     )
+    #     lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    #         optimizer,
+    #         T_max=20000 * self.cfg.training.trainer.max_epochs,
+    #         eta_min=self.cfg.training.lr * 0.01,
+    #     )
+    #     return [optimizer], [lr_scheduler]
 
     def forward(self, batch):
         inputs = BatchInputs(*batch)
@@ -99,8 +118,15 @@ class ParTauModule(L.LightningModule):
             cand_kinematics_pxpypze=inputs.cand_kinematics_pxpypze,
             cand_mask=inputs.cand_mask,
         )
-        # model_output is a tuple (tensor,); wrap in dict with the task key
-        predictions = {self.task: model_output[0]}
+        # Keep logging inputs stable while using task-specific tensors for the loss.
+        if self.task == "charge":
+            charge_logits = model_output[0]
+            predictions = {
+                self.task: torch.softmax(charge_logits, dim=-1)[:, 1],
+                "charge_logits": charge_logits,
+            }
+        else:
+            predictions = {self.task: model_output[0]}
         return predictions, inputs.target, inputs.weight
 
     def calculate_metrics(self, targets, predictions, weights):
@@ -108,12 +134,33 @@ class ParTauModule(L.LightningModule):
         target = targets[self.task]
 
         if self.task == "kinematics":
-            raw_loss = self.loss_fn(pred, target).mean(dim=-1)
+            # Original aggregate-only implementation kept for reference.
+            # raw_loss = self.loss_fn(pred, target).mean(dim=-1)
+            # is_tau_mask = targets["is_tau"].bool()
+            # loss = raw_loss[is_tau_mask].mean()
+            component_raw_loss = self.loss_fn(pred, target)
             is_tau_mask = targets["is_tau"].bool()
-            loss = raw_loss[is_tau_mask].mean()
+            masked_component_loss = component_raw_loss[is_tau_mask]
+            component_loss = masked_component_loss.mean(dim=0)
+            loss = component_loss.mean()
+            metrics = {
+                "loss": loss,
+                self._loss_key(): loss,
+                "kinematics_log_pt_loss": component_loss[0],
+                "kinematics_delta_eta_loss": component_loss[1],
+                "kinematics_sin_delta_phi_loss": component_loss[2],
+                "kinematics_cos_delta_phi_loss": component_loss[3],
+            }
+            return metrics
         elif self.task == "is_tau":
             loss = self.loss_fn(pred, target).mean()
-        else:  # "charge" or "decay_mode" — only meaningful for signal taus
+        elif self.task == "charge":
+            # Mirror the en-reg single-task setup: 2-class cross entropy on the
+            # en-reg-style charge target without tau-only masking.
+            loss = self.loss_fn(
+                predictions["charge_logits"], targets["charge_enreg"]
+            ).mean()
+        else:  # "decay_mode" — only meaningful for signal taus
             raw_loss = self.loss_fn(pred, target)
             is_tau_mask = targets["is_tau"].bool()
             loss = raw_loss[is_tau_mask].mean()

@@ -118,16 +118,15 @@ class ParTau(ParticleTransformer):
 
             # As fc_params is an empty list, then basically we have been using one Linear layer only.
             # Now introduce the different heads also here.
+            # Output raw logits - activations will be applied by loss functions or during inference
 
             output = {
-                "is_tau": torch.sigmoid(self.tau_id_head(x_cls)).squeeze(-1),  # (N,)
-                "charge": torch.sigmoid(self.tau_charge_head(x_cls)).squeeze(
-                    -1
-                ),  # (N,)
-                "decay_mode": torch.softmax(
-                    self.classification_head(x_cls), axis=-1
-                ),  # (N, num_dm_classes)
-                "kinematics": self.regression_head(x_cls),  # (N, 4)
+                "is_tau": self.tau_id_head(x_cls).squeeze(-1),  # (N,) - raw logits
+                "charge": self.tau_charge_head(x_cls).squeeze(-1),  # (N,) - raw logits
+                "decay_mode": self.classification_head(
+                    x_cls
+                ),  # (N, num_dm_classes) - raw logits
+                "kinematics": self.regression_head(x_cls),  # (N, 4) - continuous values
             }
 
             return output

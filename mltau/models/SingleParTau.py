@@ -71,11 +71,16 @@ class ParTau(ParticleTransformer):
             # Classification head for decay mode classification
             self.classification_head = nn.Linear(embed_dim, num_dm_classes)
         elif self.task == "kinematics":
-            # Regression head kinematic reconstruction [pT_vis, theta, phi, m_vis]
+            # Original regression head kinematic reconstruction [pT_vis, theta, phi, m_vis]
+            # self.regression_head = nn.Linear(embed_dim, 4)
+            # Updated regression head: [log(pt_gen/pt_reco), delta_eta, sin(delta_phi), cos(delta_phi)]
             self.regression_head = nn.Linear(embed_dim, 4)
-        elif self.task == "is_tau" or self.task == "charge":
-            # Binary heads for tau-tagging and charge reco
+        elif self.task == "is_tau":
+            # Binary head for tau-tagging
             self.binary_head = nn.Linear(embed_dim, 1)
+        elif self.task == "charge":
+            # Two-logit head to match the en-reg charge-classification setup
+            self.binary_head = nn.Linear(embed_dim, 2)
         else:
             raise NotImplementedError(
                 f"This model is not suitable for the chosen task of {self.task}"
@@ -132,11 +137,16 @@ class ParTau(ParticleTransformer):
                     torch.softmax(self.classification_head(x_cls), axis=-1),
                 )  # (N, num_dm_classes)
             elif self.task == "kinematics":
-                # Regression head kinematic reconstruction [pT_vis, theta, phi, m_vis]
+                # Original regression output [pT_vis, theta, phi, m_vis]
+                # output = (self.regression_head(x_cls),)  # (N, 4)
+                # Updated regression output [log(pt_gen/pt_reco), delta_eta, sin(delta_phi), cos(delta_phi)]
                 output = (self.regression_head(x_cls),)  # (N, 4)
-            elif self.task == "is_tau" or self.task == "charge":
-                # Binary heads for tau-tagging and charge reco
+            elif self.task == "is_tau":
+                # Binary head for tau-tagging
                 output = (torch.sigmoid(self.binary_head(x_cls)).squeeze(-1),)  # (N,)
+            elif self.task == "charge":
+                # Two-class logits for charge classification
+                output = (self.binary_head(x_cls),)  # (N, 2)
             else:
                 raise NotImplementedError(
                     f"This model is not suitable for the chosen task of {self.task}"

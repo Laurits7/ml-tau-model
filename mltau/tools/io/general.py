@@ -155,6 +155,6 @@ class BatchInputs:
     target: dict
     cand_mask: torch.Tensor
     weight: torch.Tensor
-    gen_jet_p4s: ak.Array
-    reco_jet_p4s: ak.Array
     gen_jet_tau_p4s: ak.Array
+    reco_jet_p4s: ak.Array
+    gen_jet_p4s: ak.Array
