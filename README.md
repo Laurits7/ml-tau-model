@@ -35,7 +35,7 @@ We present a multi-task learning framework that decomposes tau lepton reconstruc
 
 ---
 
-### Reconstructing hadronically decaying tau leptons with a jet foundation model [![DOI:10.21468/SciPostPhysCore.8.3.046](http://img.shields.io/badge/DOI-10.21468/SciPostPhysCore.8.3.046-f9f107.svg)](https://doi.org/10.21468/SciPostPhysCore.8.3.046)
+### Reconstructing hadronically decaying tau leptons with a jet foundation model [![DOI:10.21468/SciPostPhysCore.8.3.046](http://img.shields.io/badge/DOI-10.21468/SciPostPhysCore.8.3.046-f9f107.svg)](https://doi.org/10.21468/SciPostPhysCore.8.3.046) [![arXiv](https://img.shields.io/badge/arXiv-2503.19165-b31b1b.svg)](https://arxiv.org/abs/2503.19165)
 
 _[Published in: SciPost Phys. Core 8, 046 (2025)]_
 
