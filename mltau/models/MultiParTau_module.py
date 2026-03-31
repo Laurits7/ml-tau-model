@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 import awkward as ak
 import torch.nn as nn
 import lightning as L
@@ -29,21 +30,27 @@ class ParTauModule(L.LightningModule):
             use_amp=False,
             metric="eta-phi",
         )
-        self.tagging_loss_fn = SigmoidFocalLoss(
-            alpha=0.25, gamma=2.0, reduction="none"
-        )  # class imbalance
-        self.charge_loss_fn = SigmoidFocalLoss(reduction="none")  # class balance
-        self.decay_mode_loss_fn = nn.CrossEntropyLoss(reduction="none")
-        self.kinematics_loss_fn = nn.HuberLoss(reduction="none", delta=1.0)
 
     def training_step(self, batch, batch_idx):
         predictions, targets, weights = self.forward(batch)
+
+        # Calculate baseline charges and store them
+        inputs = BatchInputs(*batch)
+        baseline_charges = self._calculate_baseline_charges(inputs)
+
         metrics = self.calculate_metrics(
             targets=targets, predictions=predictions, weights=weights
         )
         for key, value in metrics.items():
             self.training_loss_accumulator[key].append(value.detach())
-        inputs = BatchInputs(*batch)
+        self.log(
+            "LR",
+            self.optimizers().param_groups[0]["lr"],
+            on_step=True,
+            on_epoch=False,
+            prog_bar=True,
+        )
+
         if batch_idx % 10 == 0:  # Store every 10th batch to save memory
             output = {
                 "predictions": predictions,
@@ -52,6 +59,7 @@ class ParTauModule(L.LightningModule):
                 "gen_jet_p4s": inputs.gen_jet_p4s,
                 "reco_jet_p4s": inputs.reco_jet_p4s,
                 "gen_jet_tau_p4s": inputs.gen_jet_tau_p4s,
+                "baseline_charges": baseline_charges,
             }
             self.training_outputs.append(output)
         return metrics["loss"]
@@ -72,15 +80,125 @@ class ParTauModule(L.LightningModule):
         )
         # if self.cfg.training.optimizer.use_lookahead:
         #     optimizer = Lookahead(base_optimizer=optimizer, k=6, alpha=0.5)
+
+        # Use a more reliable method to calculate T_max
+        # Check if estimated_stepping_batches is available and valid
+        estimated_steps = getattr(self.trainer, "estimated_stepping_batches", None)
+
+        if estimated_steps is None or estimated_steps <= 0:
+            # Fallback: calculate based on config (will be approximate but functional)
+            max_epochs = self.cfg.training.trainer.max_epochs
+            # Use a conservative estimate of steps per epoch
+            # This will be less precise but the scheduler will still work
+            estimated_steps_per_epoch = 500  # Reasonable default for most datasets
+            T_max = max_epochs * estimated_steps_per_epoch
+            print(
+                f"Warning: Using estimated T_max={T_max} (estimated_stepping_batches not available)"
+            )
+        else:
+            T_max = estimated_steps
+            print(f"Using calculated T_max={T_max} from estimated_stepping_batches")
+
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            T_max=20000 * self.cfg.training.trainer.max_epochs,
-            # T_max=len(dataloader_train) * cfg.training.num_epochs,
+            T_max=T_max,
             eta_min=self.cfg.training.lr * 0.01,
         )
-        # LR remains constant for the first 70% of iterations, then decays exponentially at an
-        # interval of every 20k iterations down to 1% of the inital value at the end of the training
-        return [optimizer], [lr_scheduler]
+        return [optimizer], [{"scheduler": lr_scheduler, "interval": "step"}]
+
+    def _convert_logits_to_predictions(self, logits_dict):
+        """Convert model logits to probabilities/predictions for evaluation and logging."""
+        predictions = {}
+
+        # Convert awkward arrays to tensors if needed, apply activations, then convert back
+        for key, logits in logits_dict.items():
+            # Convert awkward array to tensor if necessary
+            if hasattr(logits, "to_numpy"):  # awkward array
+                logits_tensor = torch.from_numpy(ak.to_numpy(logits))
+            else:  # already a tensor
+                logits_tensor = logits
+
+            # Apply appropriate activation
+            if key in ["is_tau", "charge"]:  # Binary classification heads
+                pred_tensor = torch.sigmoid(logits_tensor)
+            elif key == "decay_mode":  # Multiclass classification
+                pred_tensor = torch.softmax(logits_tensor, dim=-1)
+            else:  # Regression (kinematics)
+                pred_tensor = logits_tensor
+
+            # Convert back to awkward array to match the expected format
+            if hasattr(logits, "to_numpy"):  # Input was awkward array
+                predictions[key] = ak.from_numpy(pred_tensor.detach().cpu().numpy())
+            else:  # Input was tensor
+                predictions[key] = pred_tensor
+
+        return predictions
+
+    def _calculate_baseline_charges(self, inputs):
+        """Calculate baseline jet charge using Q*kappa weighting."""
+        # Extract candidate data
+        cand_charges = inputs.cand_features[:, 8, :]  # Feature index 8 is charge
+        cand_mask = inputs.cand_mask[:, 0, :]  # Remove singleton dimension
+
+        # Calculate candidate pTs from px, py
+        px = inputs.cand_kinematics_pxpypze[:, 0, :]
+        py = inputs.cand_kinematics_pxpypze[:, 1, :]
+        cand_pts = torch.sqrt(px**2 + py**2)
+
+        # Get jet pTs - first convert dict to awkward array, then reinitialize p4
+        import awkward as ak
+        from mltau.tools import general as g
+
+        try:
+            # Convert dict to awkward array
+            reco_jet_p4s_ak = ak.Array(inputs.reco_jet_p4s)
+            reco_jet_p4s = g.reinitialize_p4(reco_jet_p4s_ak)
+
+            # Handle different shapes/types for reco_jet_p4s.pt
+            pt_values = reco_jet_p4s.pt
+
+            # Convert awkward array to numpy first, then to tensor
+            if hasattr(pt_values, "to_numpy"):
+                pt_numpy = pt_values.to_numpy()
+            else:
+                pt_numpy = ak.to_numpy(pt_values)
+
+            # Ensure it's a 1D array matching batch size
+            if pt_numpy.ndim == 0:  # Scalar case
+                pt_numpy = np.array([pt_numpy])
+            elif pt_numpy.ndim > 1:  # Multi-dimensional case
+                pt_numpy = pt_numpy.flatten()[: len(cand_charges)]
+
+            jet_pts = torch.tensor(
+                pt_numpy, dtype=torch.float32, device=cand_charges.device
+            )
+
+            # Ensure jet_pts has same batch size as cand_charges
+            if len(jet_pts) != len(cand_charges):
+                # Repeat or truncate to match batch size
+                if len(jet_pts) == 1:
+                    jet_pts = jet_pts.repeat(len(cand_charges))
+                else:
+                    jet_pts = jet_pts[: len(cand_charges)]
+
+        except Exception as e:
+            print(f"Warning: Error processing reco_jet_p4s.pt: {e}")
+            # Fallback: use candidate pT sum as jet pT estimate
+            jet_pts = torch.sum(cand_pts * cand_mask, dim=1)
+            print(f"Using fallback jet pT calculation with shape: {jet_pts.shape}")
+
+        # Mask out padded candidates
+        cand_charges_masked = cand_charges * cand_mask
+        cand_pts_masked = cand_pts * cand_mask
+
+        # Calculate weighted charge (kappa=0.2)
+        kappa = 0.2
+        numer = torch.sum(cand_charges_masked * (cand_pts_masked**kappa), dim=1)
+        denom = jet_pts**kappa
+        denom = torch.where(denom == 0, torch.ones_like(denom), denom)
+
+        baseline_charges = numer / denom
+        return baseline_charges.detach().cpu().numpy()
 
     def forward(self, batch):
         """Both `predictions` and `targets` are defined for the multiple heads"""
@@ -94,38 +212,85 @@ class ParTauModule(L.LightningModule):
         )
         return predictions, inputs.target, inputs.weight
 
-    def calculate_metrics(self, targets, predictions, weights):
+    def charge_loss_fn(self, predictions, targets):
+        loss_fn = SigmoidFocalLoss(
+            reduction="none", gamma=0.0, alpha=0.5
+        )  # class balance, so one could use BCE with sigmoid also.
+        return loss_fn(predictions, targets)
 
-        # TODO: Account for weights.
+    def tagging_loss_fn(self, predictions, targets):
+        loss_fn = SigmoidFocalLoss(
+            alpha=0.75, gamma=2.0, reduction="none"
+        )  # class imbalance
+        return loss_fn(predictions, targets)
 
-        decay_mode_loss = self.decay_mode_loss_fn(
-            predictions["decay_mode"], targets["decay_mode"]  # miks siin pole squeeze?
+    def decay_mode_loss_fn(self, predictions, targets):
+        loss_fn = nn.CrossEntropyLoss(reduction="none")
+        return loss_fn(predictions, targets)
+
+    def kinematics_loss_fn(self, predictions, targets):
+        loss_fn = nn.HuberLoss(reduction="none", delta=1.0)
+        # Log-ratio terms: independent Huber in log space
+        log_pt_loss = loss_fn(predictions[:, 0], targets[:, 0])
+        log_m_loss = loss_fn(predictions[:, 3], targets[:, 3])
+        # Angle terms: combined deltaR-like Huber instead of two independent terms
+        delta_angle = torch.sqrt(
+            (predictions[:, 1] - targets[:, 1]) ** 2
+            + (predictions[:, 2] - targets[:, 2]) ** 2
+            + 1e-8
         )
+        angle_loss = loss_fn(delta_angle, torch.zeros_like(delta_angle))
+        return (log_pt_loss + angle_loss + log_m_loss) / 3.0
 
+    def calculate_metrics(
+        self, targets, predictions, weights, w_kin=1, w_dm=1, w_tag=1, w_charge=1
+    ):
+        # TODO: Account for weights.
+        is_tau_mask = targets["is_tau"].bool()
         # Tau ID
-        tau_id_loss = self.tagging_loss_fn(predictions["is_tau"], targets["is_tau"])
+        tau_id_loss = self.tagging_loss_fn(
+            predictions["is_tau"], targets["is_tau"]
+        ).mean()
+
+        if not is_tau_mask.any():
+            # Pure-background batch (e.g. entire qq row group): signal-only losses undefined
+            zero = tau_id_loss.new_zeros(())
+            return {
+                "tau_id_loss": tau_id_loss,
+                "charge_loss": zero,
+                "decay_mode_loss": zero,
+                "kinematics_loss": zero,
+                "loss": tau_id_loss,
+            }
+
+        # Decay mode
+        decay_mode_loss = self.decay_mode_loss_fn(
+            predictions["decay_mode"][is_tau_mask], targets["decay_mode"][is_tau_mask]
+        ).mean()
 
         # Charge
-        charge_loss = self.charge_loss_fn(predictions["charge"], targets["charge"])
+        charge_loss = self.charge_loss_fn(
+            predictions["charge"][is_tau_mask], targets["charge"][is_tau_mask]
+        ).mean()
 
         # Kinematics
         kinematics_loss = self.kinematics_loss_fn(
-            predictions["kinematics"], targets["kinematics"]
-        )
-        kinematics_loss = kinematics_loss.mean(dim=-1)
+            predictions["kinematics"][is_tau_mask], targets["kinematics"][is_tau_mask]
+        ).mean()
 
         combined_loss = (
-            tau_id_loss
-            + (decay_mode_loss + charge_loss + kinematics_loss) * targets["is_tau"]
+            w_tag * tau_id_loss
+            + w_dm * decay_mode_loss
+            + w_charge * charge_loss
+            + w_kin * kinematics_loss
         )  # Here use all losses only if signal sample.
 
-        is_tau_mask = targets["is_tau"].bool()
         metrics = {
-            "tau_id_loss": tau_id_loss.mean(),
-            "charge_loss": charge_loss[is_tau_mask].mean(),
-            "decay_mode_loss": decay_mode_loss[is_tau_mask].mean(),
-            "kinematics_loss": kinematics_loss[is_tau_mask].mean(),
-            "loss": combined_loss.mean(),
+            "tau_id_loss": tau_id_loss,
+            "charge_loss": charge_loss,
+            "decay_mode_loss": decay_mode_loss,
+            "kinematics_loss": kinematics_loss,
+            "loss": combined_loss,
         }
 
         # TODO: Calculate additional metrics
@@ -134,10 +299,15 @@ class ParTauModule(L.LightningModule):
 
     def validation_step(self, batch, _batch_idx):
         predictions, targets, weights = self.forward(batch)
+
+        # Calculate baseline charges and store them
+        inputs = BatchInputs(*batch)
+        baseline_charges = self._calculate_baseline_charges(inputs)
+
         metrics = self.calculate_metrics(
             targets=targets, predictions=predictions, weights=weights
         )
-        inputs = BatchInputs(*batch)
+
         output = {
             "predictions": predictions,
             "targets": targets,
@@ -145,6 +315,7 @@ class ParTauModule(L.LightningModule):
             "gen_jet_p4s": inputs.gen_jet_p4s,
             "reco_jet_p4s": inputs.reco_jet_p4s,
             "gen_jet_tau_p4s": inputs.gen_jet_tau_p4s,
+            "baseline_charges": baseline_charges,
         }
         self.validation_outputs.append(output)
         for key, value in metrics.items():
@@ -181,6 +352,7 @@ class ParTauModule(L.LightningModule):
             all_gen_jet_p4s = {}
             all_gen_jet_tau_p4s = {}
             all_reco_jet_p4s = {}
+            all_baseline_charges = []
 
             for output in dataset_outputs:
                 # Concatenate predictions for each head
@@ -212,6 +384,9 @@ class ParTauModule(L.LightningModule):
                         all_gen_jet_tau_p4s[key] = []
                     all_gen_jet_tau_p4s[key].append(ak.Array(value.detach().cpu()))
 
+                # Collect baseline charges
+                all_baseline_charges.append(output["baseline_charges"])
+
                 # Concatenate weights
                 # all_weights.append(output["weights"].detach().cpu())
 
@@ -220,6 +395,11 @@ class ParTauModule(L.LightningModule):
                 all_predictions[key] = ak.concatenate(all_predictions[key], axis=0)
             for key in all_targets:
                 all_targets[key] = ak.concatenate(all_targets[key], axis=0)
+
+            # Convert logits to probabilities for logging (evaluation functions expect probabilities)
+            all_predictions_for_logging = self._convert_logits_to_predictions(
+                all_predictions
+            )
             for key in all_gen_jet_p4s:
                 all_gen_jet_p4s[key] = ak.concatenate(all_gen_jet_p4s[key], axis=0)
             for key in all_reco_jet_p4s:
@@ -234,6 +414,9 @@ class ParTauModule(L.LightningModule):
             reco_jet_p4s = ak.Array(all_reco_jet_p4s)
             gen_jet_tau_p4s = ak.Array(all_gen_jet_tau_p4s)
 
+            # Concatenate baseline charges
+            all_baseline_charges = np.concatenate(all_baseline_charges, axis=0)
+
             # all_weights = ak.concatenate(all_weights, dim=0)
 
             # Log comprehensive metrics with full validation dataset
@@ -244,11 +427,12 @@ class ParTauModule(L.LightningModule):
                 gen_jet_p4s=gen_jet_p4s,
                 gen_jet_tau_p4s=gen_jet_tau_p4s,
                 reco_jet_p4s=reco_jet_p4s,
-                predictions=all_predictions,
+                predictions=all_predictions_for_logging,  # Use probabilities for logging
                 cfg=self.cfg,
                 tb_logger=tb_logger,
                 current_epoch=current_epoch,
                 dataset=dataset,
+                baseline_charges=all_baseline_charges,
             )
 
             # Clear outputs to free memory

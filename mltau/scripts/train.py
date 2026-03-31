@@ -42,6 +42,14 @@ def train(cfg: DictConfig):
             save_weights_only=True,
             filename="ParT-{epoch:02d}-{val_loss:.2f}",
         ),
+        ModelCheckpoint(
+            dirpath=models_dir,
+            monitor="val_losses/loss",
+            mode="min",
+            save_top_k=1,
+            save_weights_only=True,
+            filename="ParT-model_best",
+        ),
     ]
 
     trainer = L.Trainer(

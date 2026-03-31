@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import awkward as ak
 
 from omegaconf import DictConfig
 
@@ -17,6 +18,7 @@ def log_charge_id_performance(
     tb_logger,
     current_epoch: int,
     dataset="train",
+    baseline_charges: np.array = None,
 ):
     # Charge is only meaningful for signal taus — exclude background jets
     signal_mask = targets["is_tau"] == 1
@@ -24,6 +26,10 @@ def log_charge_id_performance(
     targets = targets["charge"][signal_mask]
     gen_jet_tau_p4s = gen_jet_tau_p4s[signal_mask]
     reco_jet_p4s = reco_jet_p4s[signal_mask]
+
+    # Apply signal mask to baseline charges if provided
+    if baseline_charges is not None:
+        baseline_charges = baseline_charges[signal_mask]
 
     evaluator = c.ChargeIdEvaluator(
         predicted=predictions,
@@ -33,6 +39,7 @@ def log_charge_id_performance(
         cfg=cfg,
         sample="all",
         algorithm="all",
+        baseline_charges=baseline_charges,
     )
 
     # Classifier plot
@@ -46,6 +53,14 @@ def log_charge_id_performance(
     roc_plot.add_line(evaluator)
     tb_logger.add_figure("charge_id/ROC", roc_plot.fig, current_epoch)
     plt.close(roc_plot.fig)
+
+    # Confusion matrix plot
+    confusion_plot = c.ConfusionMatrixPlot()
+    confusion_plot.add_data(evaluator)
+    tb_logger.add_figure(
+        "charge_id/confusion_matrix", confusion_plot.fig, current_epoch
+    )
+    plt.close(confusion_plot.fig)
 
     # Per-metric efficiency and fakerate plots
     metrics = list(cfg.metrics.charge.metrics.keys())
@@ -62,10 +77,32 @@ def log_charge_id_performance(
         tb_logger.add_figure(f"charge_id/{metric}_fakerate", fr_plot.fig, current_epoch)
         plt.close(fr_plot.fig)
 
-    # Scalar classification metrics at the ROC-intersection working point
+    # Scalar classification metrics at the 95% average efficiency working point
     charge_scalars = binary_classifier_metrics(
         evaluator.predicted, evaluator.truth, evaluator.wp_pos
     )
     charge_scalars["wp_pos"] = evaluator.wp_pos
     charge_scalars["wp_neg"] = evaluator.wp_neg
+
+    # Add confusion matrix metrics
+    confusion_matrix = evaluator.confusion_matrix
+    charge_scalars["TP"] = confusion_matrix["TP"]
+    charge_scalars["TN"] = confusion_matrix["TN"]
+    charge_scalars["FP"] = confusion_matrix["FP"]
+    charge_scalars["FN"] = confusion_matrix["FN"]
+
+    # Calculate and add derived metrics from confusion matrix
+    total = (
+        confusion_matrix["TP"]
+        + confusion_matrix["TN"]
+        + confusion_matrix["FP"]
+        + confusion_matrix["FN"]
+    )
+    if total > 0:
+        charge_scalars["confusion_accuracy"] = (
+            confusion_matrix["TP"] + confusion_matrix["TN"]
+        ) / total
+    else:
+        charge_scalars["confusion_accuracy"] = 0.0
+
     log_metrics_dict(tb_logger, charge_scalars, "charge_id", current_epoch)
