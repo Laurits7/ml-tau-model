@@ -116,7 +116,7 @@ class ParticleTransformerDataset(IterableDataset):
 
         charge_tensor = (torch.tensor(ak.to_numpy(data.gen_jet_tau_charge)) == 1).long()
 
-        dtheta = f.deltaPhi(gen_jet_tau_p4s.theta, jet_p4s.theta)
+        dtheta = f.deltaTheta(gen_jet_tau_p4s.theta, jet_p4s.theta)
         dphi = f.deltaPhi(gen_jet_tau_p4s.phi, jet_p4s.phi)
         # Add epsilon and clamp to avoid log(0) or log(negative)
         vis_pt_ratio = torch.tensor(gen_jet_tau_p4s.pt / jet_p4s.pt)
