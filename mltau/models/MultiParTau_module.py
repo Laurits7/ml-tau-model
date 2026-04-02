@@ -31,6 +31,19 @@ class ParTauModule(L.LightningModule):
             metric="eta-phi",
         )
 
+        # Initialize loss functions once to avoid memory allocation overhead
+        self.charge_loss = nn.BCEWithLogitsLoss(
+            reduction="none"
+        )  # For raw logits - avoids bias from double sigmoid
+        # self.charge_loss = SigmoidFocalLoss(
+        #     reduction="none", gamma=0.0, alpha=0.5
+        # )  # class balance, so one could use BCE with sigmoid also.
+        self.tagging_loss = SigmoidFocalLoss(
+            alpha=0.75, gamma=2.0, reduction="none"
+        )  # class imbalance
+        self.decay_mode_loss = nn.CrossEntropyLoss(reduction="none")
+        self.kinematics_loss = nn.HuberLoss(reduction="none", delta=1.0)
+
     def training_step(self, batch, batch_idx):
         predictions, targets, weights = self.forward(batch)
 
@@ -51,7 +64,9 @@ class ParTauModule(L.LightningModule):
             prog_bar=True,
         )
 
-        if batch_idx % 10 == 0:  # Store every 10th batch to save memory
+        if (
+            batch_idx % 100 == 0
+        ):  # Reduced frequency: store every 100th batch to save memory
             output = {
                 "predictions": predictions,
                 "targets": targets,
@@ -71,12 +86,10 @@ class ParTauModule(L.LightningModule):
         return self.forward(batch)[0]
 
     def configure_optimizers(self):
-        # Consider using AdamW
-        optimizer = torch.optim.RAdam(
+        # AdamW is generally preferred for transformer architectures
+        optimizer = torch.optim.AdamW(
             params=self.ParTau.parameters(),
             lr=self.cfg.training.lr,
-            betas=(0.95, 0.999),
-            eps=1e-5,
         )
         # if self.cfg.training.optimizer.use_lookahead:
         #     optimizer = Lookahead(base_optimizer=optimizer, k=6, alpha=0.5)
@@ -213,33 +226,25 @@ class ParTauModule(L.LightningModule):
         return predictions, inputs.target, inputs.weight
 
     def charge_loss_fn(self, predictions, targets):
-        loss_fn = SigmoidFocalLoss(
-            reduction="none", gamma=0.0, alpha=0.5
-        )  # class balance, so one could use BCE with sigmoid also.
-        return loss_fn(predictions, targets)
+        return self.charge_loss(predictions, targets)
 
     def tagging_loss_fn(self, predictions, targets):
-        loss_fn = SigmoidFocalLoss(
-            alpha=0.75, gamma=2.0, reduction="none"
-        )  # class imbalance
-        return loss_fn(predictions, targets)
+        return self.tagging_loss(predictions, targets)
 
     def decay_mode_loss_fn(self, predictions, targets):
-        loss_fn = nn.CrossEntropyLoss(reduction="none")
-        return loss_fn(predictions, targets)
+        return self.decay_mode_loss(predictions, targets)
 
     def kinematics_loss_fn(self, predictions, targets):
-        loss_fn = nn.HuberLoss(reduction="none", delta=1.0)
         # Log-ratio terms: independent Huber in log space
-        log_pt_loss = loss_fn(predictions[:, 0], targets[:, 0])
-        log_m_loss = loss_fn(predictions[:, 3], targets[:, 3])
+        log_pt_loss = self.kinematics_loss(predictions[:, 0], targets[:, 0])
+        log_m_loss = self.kinematics_loss(predictions[:, 3], targets[:, 3])
         # Angle terms: combined deltaR-like Huber instead of two independent terms
         delta_angle = torch.sqrt(
             (predictions[:, 1] - targets[:, 1]) ** 2
             + (predictions[:, 2] - targets[:, 2]) ** 2
             + 1e-8
         )
-        angle_loss = loss_fn(delta_angle, torch.zeros_like(delta_angle))
+        angle_loss = self.kinematics_loss(delta_angle, torch.zeros_like(delta_angle))
         return (log_pt_loss + angle_loss + log_m_loss) / 3.0
 
     def calculate_metrics(

@@ -39,7 +39,7 @@ We present a multi-task learning framework that decomposes tau lepton reconstruc
 
 _[Published in: SciPost Phys. Core 8, 046 (2025)]_
 
-**Keywords:** foundation models, transfer learning, neural networks
+**Keywords:** foundation models, transfer learning, tau tagging, decay mode classification, kinematic regression
 
 We study how OmniJet-α, a foundation model for particle jets, can be fine-tuned for hadronically decaying tau lepton reconstruction, demonstrating ~50% improvement in momentum reconstruction resolution when using pretrained weights compared to training from scratch.
 

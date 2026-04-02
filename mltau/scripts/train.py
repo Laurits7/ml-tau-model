@@ -38,14 +38,6 @@ def train(cfg: DictConfig):
             dirpath=models_dir,
             monitor="val_losses/loss",
             mode="min",
-            save_top_k=-1,
-            save_weights_only=True,
-            filename="ParT-{epoch:02d}-{val_loss:.2f}",
-        ),
-        ModelCheckpoint(
-            dirpath=models_dir,
-            monitor="val_losses/loss",
-            mode="min",
             save_top_k=1,
             save_weights_only=True,
             filename="ParT-model_best",
@@ -63,7 +55,13 @@ def train(cfg: DictConfig):
                 default_hp_metric=False,
             ),
         ],
-        # overfit_batches=50,
+        # Performance optimizations
+        accelerator="auto",  # Automatically detect GPU/CPU
+        gradient_clip_val=1.0,  # Stability with variable sequence lengths
+        log_every_n_steps=50,  # Reduce logging overhead
+        num_sanity_val_steps=0,  # Skip sanity validation for faster startup
+        enable_progress_bar=True,  # Keep enabled for monitoring
+        precision="16-mixed",  # Enable mixed precision for faster training
     )
     trainer.fit(model=model, datamodule=datamodule)
 
