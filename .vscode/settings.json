@@ -1,5 +1,0 @@
-{
-  "remote-sync.connection.host": "quasar",
-  "remote-sync.connection.remotePath": "/home/laurits/ml-tau/ml-tau-model",
-  "remote-sync.connection.enabled": true
-}
