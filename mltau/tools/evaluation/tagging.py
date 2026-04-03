@@ -44,9 +44,9 @@ class TaggerEvaluator:
         all_scores = np.concatenate(
             [np.asarray(signal_predictions), np.asarray(bkg_predictions)]
         )
-        self.tagging_cuts = np.unique(np.concatenate(
-            [[0], np.quantile(all_scores, np.linspace(0, 1, 1000)), [1]]
-        ))
+        self.tagging_cuts = np.unique(
+            np.concatenate([[0], np.quantile(all_scores, np.linspace(0, 1, 1000)), [1]])
+        )
 
         self.fakerates, self.fake_numerator_mask, self.fake_denominator_mask = (
             self._calculate_fakerates()

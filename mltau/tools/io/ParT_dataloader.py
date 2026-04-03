@@ -18,12 +18,11 @@ np.random.seed(42)
 
 
 class ParticleTransformerDataset(IterableDataset):
-    def __init__(self, row_groups: Sequence[ig.RowGroup], device: str, cfg: DictConfig):
+    def __init__(self, row_groups: Sequence[ig.RowGroup], cfg: DictConfig):
         super().__init__()
         self.cfg = cfg
         self.row_groups = row_groups
         self.num_rows = sum([rg.num_rows for rg in self.row_groups])
-        self.device = device
         print(f"There are {'{:,}'.format(self.num_rows)} jets in the dataset.")
 
     def _pad_and_convert_to_tensor(
@@ -115,26 +114,35 @@ class ParticleTransformerDataset(IterableDataset):
             torch.tensor(ak.to_numpy(data.gen_jet_tau_decaymode)) != -1
         ).long()
 
-        charge_tensor = (torch.tensor(ak.to_numpy(data.gen_jet_tau_charge)) == 1).long()
+        charge_tensor = (
+            torch.tensor(ak.to_numpy(data.gen_jet_tau_charge)) == 1
+        ).float()
 
-        dtheta = f.deltaPhi(gen_jet_tau_p4s.theta, jet_p4s.theta)
-        dphi = f.deltaPhi(gen_jet_tau_p4s.phi, jet_p4s.phi)
+        # dtheta = f.deltaTheta(gen_jet_tau_p4s.theta, jet_p4s.theta)
+
+        deta = f.signedDeltaEta(gen_jet_tau_p4s.eta, jet_p4s.eta)
+        dphi = f.signedDeltaPhi(gen_jet_tau_p4s.phi, jet_p4s.phi)
         # Add epsilon and clamp to avoid log(0) or log(negative)
         vis_pt_ratio = torch.tensor(gen_jet_tau_p4s.pt / jet_p4s.pt)
         vis_pt_ratio_safe = torch.clamp(vis_pt_ratio, min=eps)
 
         vis_m_ratio = torch.tensor(gen_jet_tau_p4s.mass / jet_p4s.mass)
         vis_m_ratio_safe = torch.clamp(vis_m_ratio, min=eps)
-        # Stack kinematic variables into a single tensor [N, 4] for [pT_vis, theta, phi, m_vis]
+        # Stack kinematic variables into a single tensor [N, 5] for [pT_vis, eta, sin(phi), cos(phi), m_vis]
         kinematics_tensor = torch.stack(
             [
                 torch.log(vis_pt_ratio_safe),  # pT_vis (log of pT ratio) - safe version
-                torch.tensor(dtheta),  # delta theta between gen_vis_tau and reco_jet
-                torch.tensor(dphi),  # delta phi  between gen_vis_tau and reco_jet
+                torch.tensor(deta),  # delta eta between gen_vis_tau and reco_jet
+                torch.sin(
+                    torch.tensor(dphi)
+                ),  # sin(delta phi) between gen_vis_tau and reco_jet
+                torch.cos(
+                    torch.tensor(dphi)
+                ),  # cos(delta phi) between gen_vis_tau and reco_jet
                 torch.log(vis_m_ratio_safe),  # m_vis
             ],
             dim=-1,
-        )  # Stack along last dimension to get [N, 4]
+        )  # Stack along last dimension to get [N, 5]
 
         # Pad and convert cand_kinematics to tensor
         cand_kinematics_tensor = torch.stack(
@@ -172,7 +180,7 @@ class ParticleTransformerDataset(IterableDataset):
             {
                 "kinematics": kinematics_tensor.float(),
                 "decay_mode": gen_jet_tau_decaymode_ohe.float(),
-                "charge": charge_tensor.long(),
+                "charge": charge_tensor.float(),
                 "is_tau": gen_jet_tau_decaymode_exists.long(),
             },
             mask,
@@ -181,11 +189,6 @@ class ParticleTransformerDataset(IterableDataset):
             jet_p4s,
             gen_jet_p4s,
         )
-
-    def _move_to_device(self, batch):
-        if isinstance(batch, (tuple, list)):
-            return [self._move_to_device(x) for x in batch]
-        return batch.to(self.device)
 
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -206,15 +209,14 @@ class ParticleTransformerDataset(IterableDataset):
             tensors = self.build_tensors(data)
 
             # return individual jets from the dataset
+            # Note: Let PyTorch Lightning handle device placement automatically
             for ijet in range(len(data)):
                 yield (
-                    self._move_to_device(tensors[0][ijet]),  # cand_features
-                    self._move_to_device(tensors[1][ijet]),  # cand_kinematics
-                    {
-                        k: self._move_to_device(v[ijet]) for k, v in tensors[2].items()
-                    },  # targets
-                    self._move_to_device(tensors[3][ijet]),  # mask
-                    self._move_to_device(tensors[4][ijet]),  # weights
+                    tensors[0][ijet],  # cand_features
+                    tensors[1][ijet],  # cand_kinematics
+                    {k: v[ijet] for k, v in tensors[2].items()},  # targets
+                    tensors[3][ijet],  # mask
+                    tensors[4][ijet],  # weights
                     {
                         field: tensors[5][field][ijet] for field in tensors[5].fields
                     },  # gen_jet_tau_p4s
@@ -232,7 +234,6 @@ class ParTDataModule(LightningDataModule):
         self,
         cfg: DictConfig,
         debug_run: bool = False,
-        device: str = "cpu",
     ):
         """Base data module class to be used for different types of trainings.
         Parameters:
@@ -246,7 +247,6 @@ class ParTDataModule(LightningDataModule):
         )
         self.debug_run = debug_run
         self.sample = "z" if not use_bkg else "*"
-        self.device = device
         self.train_loader = None
         self.test_loader = None
         self.val_loader = None
@@ -291,54 +291,71 @@ class ParTDataModule(LightningDataModule):
             return []
 
     def setup(self, stage: str) -> None:
+        # For debug runs, use smaller but reasonable batch size for speed
         batch_size = (
-            self.cfg.training.dataloader.batch_size if not self.debug_run else 1
+            self.cfg.training.dataloader.batch_size if not self.debug_run else 512
         )
         if stage == "fit":
             train_row_groups, val_row_groups = self.get_dataset_rowgroups(
                 dataset_type="train"
             )
             self.train_dataset = ParticleTransformerDataset(
-                row_groups=train_row_groups, device=self.device, cfg=self.cfg
+                row_groups=train_row_groups, cfg=self.cfg
             )
             self.val_dataset = ParticleTransformerDataset(
-                row_groups=val_row_groups, device=self.device, cfg=self.cfg
+                row_groups=val_row_groups, cfg=self.cfg
             )
+            # Use conservative prefetch_factor to avoid memory issues with IterableDataset
+            # IterableDatasets with complex data (awkward arrays) can cause OOM with high prefetch
+            safe_prefetch = min(self.cfg.training.dataloader.prefetch_factor, 4)
             self.train_loader = DataLoader(
                 self.train_dataset,
                 batch_size=batch_size,
-                persistent_workers=True,
-                num_workers=self.cfg.training.dataloader.num_dataloader_workers,
+                persistent_workers=False if self.debug_run else True,
+                num_workers=(
+                    0
+                    if self.debug_run
+                    else self.cfg.training.dataloader.num_dataloader_workers
+                ),
                 multiprocessing_context=(
                     "forkserver"
                     if self.cfg.training.dataloader.num_dataloader_workers > 1
                     else None
                 ),
-                # prefetch_factor=self.cfg.training.dataloader.prefetch_factor,
+                prefetch_factor=safe_prefetch,  # Limited to prevent memory explosion
+                pin_memory=True,  # Enable for faster GPU transfers
             )
+            safe_prefetch = min(self.cfg.training.dataloader.prefetch_factor, 4)
             self.val_loader = DataLoader(
                 self.val_dataset,
                 batch_size=batch_size,
-                persistent_workers=True,
-                num_workers=self.cfg.training.dataloader.num_dataloader_workers,
+                persistent_workers=False if self.debug_run else True,
+                num_workers=(
+                    0
+                    if self.debug_run
+                    else self.cfg.training.dataloader.num_dataloader_workers
+                ),
                 multiprocessing_context=(
                     "forkserver"
                     if self.cfg.training.dataloader.num_dataloader_workers > 1
                     else None
                 ),
-                # prefetch_factor=self.cfg.training.dataloader.prefetch_factor,
+                prefetch_factor=safe_prefetch,  # Limited to prevent memory explosion
+                pin_memory=True,  # Enable for faster GPU transfers
             )
         elif stage == "test":
             test_row_groups = self.get_dataset_rowgroups(dataset_type="test")
-            self.test_dataset = self.ParticleTransformerDataset(
-                row_groups=test_row_groups, device=self.device, cfg=self.cfg
+            self.test_dataset = ParticleTransformerDataset(
+                row_groups=test_row_groups, cfg=self.cfg
             )
+            safe_prefetch = min(self.cfg.training.dataloader.prefetch_factor, 4)
             self.test_loader = DataLoader(
                 self.test_dataset,
                 batch_size=batch_size,
                 persistent_workers=True,
                 num_workers=self.cfg.training.dataloader.num_dataloader_workers,
-                # prefetch_factor=self.cfg.training.dataloader.prefetch_factor,
+                prefetch_factor=safe_prefetch,  # Limited to prevent memory explosion
+                pin_memory=True,  # Enable for faster GPU transfers
             )
         else:
             raise ValueError(f"Unexpected stage: {stage}")

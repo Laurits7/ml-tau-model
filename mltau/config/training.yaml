@@ -10,4 +10,4 @@ training:
   dataloader:
     batch_size: 2048
     num_dataloader_workers: 4
-    prefetch_factor: 100
+    prefetch_factor: 8  # Reduced from 100: safer with IterableDataset + awkward arrays

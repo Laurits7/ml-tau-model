@@ -65,7 +65,7 @@ class ParTauModule(L.LightningModule):
         for key, value in metrics.items():
             self.training_loss_accumulator[key].append(value.detach())
         inputs = BatchInputs(*batch)
-        if batch_idx % 10 == 0:
+        if batch_idx % 100 == 0:  # Reduced frequency: store every 100th batch to save memory
             self.training_outputs.append(
                 {
                     "predictions": predictions,
@@ -88,13 +88,30 @@ class ParTauModule(L.LightningModule):
             params=self.ParTau.parameters(),
             lr=self.cfg.training.lr,
         )
+        
+        # Check if estimated_stepping_batches is available and valid
+        estimated_steps = getattr(self.trainer, "estimated_stepping_batches", None)
+
+        if estimated_steps is None or estimated_steps <= 0:
+            # Fallback: calculate based on config (will be approximate but functional)
+            max_epochs = self.cfg.training.trainer.max_epochs
+            # Use a conservative estimate of steps per epoch
+            # This will be less precise but the scheduler will still work
+            estimated_steps_per_epoch = 500  # Reasonable default for most datasets
+            T_max = max_epochs * estimated_steps_per_epoch
+            print(
+                f"Warning: Using estimated T_max={T_max} (estimated_stepping_batches not available)"
+            )
+        else:
+            T_max = estimated_steps
+            print(f"Using calculated T_max={T_max} from estimated_stepping_batches")
+
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            T_max=len(self.trainer.datamodule.train_dataloader())
-            * self.cfg.training.trainer.max_epochs,
+            T_max=T_max,
             eta_min=self.cfg.training.lr * 0.01,
         )
-        return [optimizer], [lr_scheduler]
+        return [optimizer], [{"scheduler": lr_scheduler, "interval": "step"}]
 
     
     # def configure_optimizers(self):

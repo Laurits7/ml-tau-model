@@ -68,7 +68,7 @@ class ParTau(ParticleTransformer):
         # Classification head for decay mode classification
         self.classification_head = nn.Linear(embed_dim, num_dm_classes)
         # Regression head kinematic reconstruction [pT_vis, theta, phi, m_vis]
-        self.regression_head = nn.Linear(embed_dim, 4)
+        self.regression_head = nn.Linear(embed_dim, 5)  # [log_pt, deta, sin(dphi), cos(dphi), log_m]
         # Binary heads for tau-tagging and charge reco
         self.tau_id_head = nn.Linear(embed_dim, 1)
         self.tau_charge_head = nn.Linear(embed_dim, 1)
@@ -126,7 +126,7 @@ class ParTau(ParticleTransformer):
                 "decay_mode": self.classification_head(
                     x_cls
                 ),  # (N, num_dm_classes) - raw logits
-                "kinematics": self.regression_head(x_cls),  # (N, 4) - continuous values
+                "kinematics": self.regression_head(x_cls),  # (N, 5) - [log_pt, deta, sin(dphi), cos(dphi), log_m]
             }
 
             return output

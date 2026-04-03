@@ -6,11 +6,12 @@ Model output dict:
   predictions["is_tau"]      shape (N,)    sigmoid score ∈ [0, 1]
   predictions["charge"]      shape (N,)    sigmoid score ∈ [0, 1]  (1 = positive charge)
   predictions["decay_mode"]  shape (N, 6)  softmax probabilities over DM classes [0,1,2,10,11,15]
-  predictions["kinematics"]  shape (N, 4)  raw regression:
-      [:,0] = log(pt_gen / pt_reco)         → pred_pt = exp(pred[:,0]) * reco.pt
-      [:,1] = delta_theta (gen - reco)      → pred_theta = pred[:,1] + reco.theta
-      [:,2] = delta_phi   (gen - reco)      → pred_phi   = pred[:,2] + reco.phi
-      [:,3] = log(m_gen / m_reco)           → pred_mass  = exp(pred[:,3]) * reco.mass
+  predictions["kinematics"]  shape (N, 5)  raw regression:
+      [:,0] = log(pt_gen / pt_reco)              → pred_pt   = exp(pred[:,0]) * reco.pt
+      [:,1] = delta_eta (gen - reco)             → pred_eta  = pred[:,1] + reco.eta
+      [:,2] = sin(delta_phi) (gen - reco)        ↘
+      [:,3] = cos(delta_phi) (gen - reco)        → pred_phi  = reco.phi + atan2(sin, cos)
+      [:,4] = log(m_gen / m_reco)                → pred_mass = exp(pred[:,4]) * reco.mass
 
 Output awkward array fields per candidate:
   tagging_score        float   sigmoid score (is_tau)
@@ -56,25 +57,20 @@ def postprocess_predictions(predictions: dict, reco_jet_p4s: ak.Array) -> ak.Arr
     # --- reco 4-vector ---
     reco = reinitialize_p4(reco_jet_p4s)
     reco_pt = np.asarray(reco.pt)
-    reco_theta = np.asarray(reco.theta)  # vector derives theta from eta
+    reco_eta = np.asarray(reco.eta)
     reco_phi = np.asarray(reco.phi)
     reco_mass = np.asarray(reco.mass)
 
     # --- decode kinematics ---
-    kin = to_np(predictions["kinematics"])  # (N, 4)
+    kin = to_np(predictions["kinematics"])  # (N, 5)
 
     pred_pt = np.exp(kin[:, 0]) * reco_pt
-    pred_theta = kin[:, 1] + reco_theta
-    pred_phi = kin[:, 2] + reco_phi
-    pred_mass = np.exp(kin[:, 3]) * reco_mass
+    pred_eta = kin[:, 1] + reco_eta
+    pred_phi = reco_phi + np.arctan2(kin[:, 2], kin[:, 3])  # atan2(sin, cos)
+    pred_mass = np.exp(kin[:, 4]) * reco_mass
 
-    # theta → eta:  eta = -log(tan(theta/2))
-    theta_clipped = np.clip(pred_theta, 1e-6, np.pi - 1e-6)
-    pred_eta = -np.log(np.tan(theta_clipped / 2.0))
-
-    # energy:  E = sqrt((pt/sin(theta))^2 + m^2)
-    sin_theta = np.clip(np.sin(theta_clipped), 1e-6, None)
-    pred_p = pred_pt / sin_theta
+    # energy:  E = sqrt(pt^2 * cosh^2(eta) + m^2)  [via p = pt*cosh(eta)]
+    pred_p = pred_pt * np.cosh(pred_eta)
     pred_energy = np.sqrt(pred_p**2 + pred_mass**2)
 
     # --- decode decay mode ---

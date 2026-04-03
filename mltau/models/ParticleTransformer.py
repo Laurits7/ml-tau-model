@@ -674,7 +674,13 @@ class Block(nn.Module):
             residual = x
             x = self.pre_attn_norm(x)
             x = self.attn(
-                x, x, x, key_padding_mask=padding_mask.float(), attn_mask=attn_mask
+                x,
+                x,
+                x,
+                key_padding_mask=padding_mask.to(dtype=x.dtype).masked_fill_(
+                    padding_mask, float("-inf")
+                ),
+                attn_mask=attn_mask,
             )[
                 0
             ]  # (seq_len, batch, embed_dim)
