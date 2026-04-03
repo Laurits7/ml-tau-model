@@ -4,6 +4,7 @@ import awkward as ak
 import torch.nn as nn
 import lightning as L
 from omegaconf import DictConfig
+from mltau.tools import general as g
 
 # from mltau.tools.optimizers.lookahead import Lookahead
 from mltau.tools.io.general import BatchInputs
@@ -47,10 +48,6 @@ class ParTauModule(L.LightningModule):
     def training_step(self, batch, batch_idx):
         predictions, targets, weights = self.forward(batch)
 
-        # Calculate baseline charges and store them
-        inputs = BatchInputs(*batch)
-        baseline_charges = self._calculate_baseline_charges(inputs)
-
         metrics = self.calculate_metrics(
             targets=targets, predictions=predictions, weights=weights
         )
@@ -64,19 +61,6 @@ class ParTauModule(L.LightningModule):
             prog_bar=True,
         )
 
-        if (
-            batch_idx % 100 == 0
-        ):  # Reduced frequency: store every 100th batch to save memory
-            output = {
-                "predictions": predictions,
-                "targets": targets,
-                # "weights": weights,
-                "gen_jet_p4s": inputs.gen_jet_p4s,
-                "reco_jet_p4s": inputs.reco_jet_p4s,
-                "gen_jet_tau_p4s": inputs.gen_jet_tau_p4s,
-                "baseline_charges": baseline_charges,
-            }
-            self.training_outputs.append(output)
         return metrics["loss"]
 
     def predict_step(self, batch, _batch_idx):
@@ -150,7 +134,7 @@ class ParTauModule(L.LightningModule):
     def _calculate_baseline_charges(self, inputs):
         """Calculate baseline jet charge using Q*kappa weighting."""
         # Extract candidate data
-        cand_charges = inputs.cand_features[:, 8, :]  # Feature index 8 is charge
+        cand_charges = inputs.cand_features[:, 7, :]  # Feature index 7 is charge
         cand_mask = inputs.cand_mask[:, 0, :]  # Remove singleton dimension
 
         # Calculate candidate pTs from px, py
@@ -159,36 +143,28 @@ class ParTauModule(L.LightningModule):
         cand_pts = torch.sqrt(px**2 + py**2)
 
         # Get jet pTs - first convert dict to awkward array, then reinitialize p4
-        import awkward as ak
-        from mltau.tools import general as g
-
         try:
             # Convert dict to awkward array
             reco_jet_p4s_ak = ak.Array(inputs.reco_jet_p4s)
             reco_jet_p4s = g.reinitialize_p4(reco_jet_p4s_ak)
 
-            # Handle different shapes/types for reco_jet_p4s.pt
             pt_values = reco_jet_p4s.pt
 
-            # Convert awkward array to numpy first, then to tensor
             if hasattr(pt_values, "to_numpy"):
                 pt_numpy = pt_values.to_numpy()
             else:
                 pt_numpy = ak.to_numpy(pt_values)
 
-            # Ensure it's a 1D array matching batch size
-            if pt_numpy.ndim == 0:  # Scalar case
+            if pt_numpy.ndim == 0:
                 pt_numpy = np.array([pt_numpy])
-            elif pt_numpy.ndim > 1:  # Multi-dimensional case
+            elif pt_numpy.ndim > 1:
                 pt_numpy = pt_numpy.flatten()[: len(cand_charges)]
 
             jet_pts = torch.tensor(
                 pt_numpy, dtype=torch.float32, device=cand_charges.device
             )
 
-            # Ensure jet_pts has same batch size as cand_charges
             if len(jet_pts) != len(cand_charges):
-                # Repeat or truncate to match batch size
                 if len(jet_pts) == 1:
                     jet_pts = jet_pts.repeat(len(cand_charges))
                 else:
@@ -196,15 +172,11 @@ class ParTauModule(L.LightningModule):
 
         except Exception as e:
             print(f"Warning: Error processing reco_jet_p4s.pt: {e}")
-            # Fallback: use candidate pT sum as jet pT estimate
             jet_pts = torch.sum(cand_pts * cand_mask, dim=1)
-            print(f"Using fallback jet pT calculation with shape: {jet_pts.shape}")
 
-        # Mask out padded candidates
         cand_charges_masked = cand_charges * cand_mask
         cand_pts_masked = cand_pts * cand_mask
 
-        # Calculate weighted charge (kappa=0.2)
         kappa = 0.2
         numer = torch.sum(cand_charges_masked * (cand_pts_masked**kappa), dim=1)
         denom = jet_pts**kappa
@@ -234,18 +206,28 @@ class ParTauModule(L.LightningModule):
     def decay_mode_loss_fn(self, predictions, targets):
         return self.decay_mode_loss(predictions, targets)
 
-    def kinematics_loss_fn(self, predictions, targets):
+    def kinematics_loss_fn(self, predictions, targets, l_m: float = 0.2):
         # Log-ratio terms: independent Huber in log space
-        log_pt_loss = self.kinematics_loss(predictions[:, 0], targets[:, 0])
-        log_m_loss = self.kinematics_loss(predictions[:, 3], targets[:, 3])
-        # Angle terms: combined deltaR-like Huber instead of two independent terms
-        delta_angle = torch.sqrt(
-            (predictions[:, 1] - targets[:, 1]) ** 2
-            + (predictions[:, 2] - targets[:, 2]) ** 2
-            + 1e-8
-        )
-        angle_loss = self.kinematics_loss(delta_angle, torch.zeros_like(delta_angle))
-        return (log_pt_loss + angle_loss + log_m_loss) / 3.0
+        log_pt_loss = self.kinematics_loss(predictions[:, 0], targets[:, 0])  # log pT
+        log_m_loss = self.kinematics_loss(predictions[:, 4], targets[:, 4])  # log mass
+
+        # Delta eta term
+        deta_loss = self.kinematics_loss(predictions[:, 1], targets[:, 1])  # delta eta
+
+        # Angular terms using sin/cos representation
+        sin_dphi_loss = self.kinematics_loss(
+            predictions[:, 2], targets[:, 2]
+        )  # sin(dphi)
+        cos_dphi_loss = self.kinematics_loss(
+            predictions[:, 3], targets[:, 3]
+        )  # cos(dphi)
+
+        # Average all components weighted by their importance
+        return (
+            log_pt_loss + deta_loss + sin_dphi_loss + cos_dphi_loss + l_m * log_m_loss
+        ) / (
+            4.0 + l_m
+        )  # Normalize by sum of weights: 4 * 1.0 + l_m
 
     def calculate_metrics(
         self, targets, predictions, weights, w_kin=1, w_dm=1, w_tag=1, w_charge=1
@@ -305,9 +287,8 @@ class ParTauModule(L.LightningModule):
     def validation_step(self, batch, _batch_idx):
         predictions, targets, weights = self.forward(batch)
 
-        # Calculate baseline charges and store them
+        # Store inputs for baseline calculation at epoch end
         inputs = BatchInputs(*batch)
-        baseline_charges = self._calculate_baseline_charges(inputs)
 
         metrics = self.calculate_metrics(
             targets=targets, predictions=predictions, weights=weights
@@ -317,10 +298,7 @@ class ParTauModule(L.LightningModule):
             "predictions": predictions,
             "targets": targets,
             # "weights": weights,
-            "gen_jet_p4s": inputs.gen_jet_p4s,
-            "reco_jet_p4s": inputs.reco_jet_p4s,
-            "gen_jet_tau_p4s": inputs.gen_jet_tau_p4s,
-            "baseline_charges": baseline_charges,
+            "inputs": inputs,  # Store inputs for baseline calculation and p4s extraction at epoch end
         }
         self.validation_outputs.append(output)
         for key, value in metrics.items():
@@ -357,7 +335,7 @@ class ParTauModule(L.LightningModule):
             all_gen_jet_p4s = {}
             all_gen_jet_tau_p4s = {}
             all_reco_jet_p4s = {}
-            all_baseline_charges = []
+            all_inputs = []  # Store all inputs for baseline calculation
 
             for output in dataset_outputs:
                 # Concatenate predictions for each head
@@ -372,25 +350,25 @@ class ParTauModule(L.LightningModule):
                         all_targets[key] = []
                     all_targets[key].append(target.detach().cpu())
 
-                # Concatenate gen_jet_p4s
-                for key, value in output["gen_jet_p4s"].items():
+                # Store inputs for baseline calculation and p4s extraction
+                inputs = output["inputs"]
+                all_inputs.append(inputs)
+
+                # Extract p4s from inputs
+                for key, value in inputs.gen_jet_p4s.items():
                     if key not in all_gen_jet_p4s:
                         all_gen_jet_p4s[key] = []
                     all_gen_jet_p4s[key].append(ak.Array(value.detach().cpu()))
 
-                # Concatenate reco_jet_p4s
-                for key, value in output["reco_jet_p4s"].items():
+                for key, value in inputs.reco_jet_p4s.items():
                     if key not in all_reco_jet_p4s:
                         all_reco_jet_p4s[key] = []
                     all_reco_jet_p4s[key].append(ak.Array(value.detach().cpu()))
 
-                for key, value in output["gen_jet_tau_p4s"].items():
+                for key, value in inputs.gen_jet_tau_p4s.items():
                     if key not in all_gen_jet_tau_p4s:
                         all_gen_jet_tau_p4s[key] = []
                     all_gen_jet_tau_p4s[key].append(ak.Array(value.detach().cpu()))
-
-                # Collect baseline charges
-                all_baseline_charges.append(output["baseline_charges"])
 
                 # Concatenate weights
                 # all_weights.append(output["weights"].detach().cpu())
@@ -419,7 +397,10 @@ class ParTauModule(L.LightningModule):
             reco_jet_p4s = ak.Array(all_reco_jet_p4s)
             gen_jet_tau_p4s = ak.Array(all_gen_jet_tau_p4s)
 
-            # Concatenate baseline charges
+            all_baseline_charges = []
+            for inputs in all_inputs:
+                baseline_charges = self._calculate_baseline_charges(inputs)
+                all_baseline_charges.append(baseline_charges)
             all_baseline_charges = np.concatenate(all_baseline_charges, axis=0)
 
             # all_weights = ak.concatenate(all_weights, dim=0)
@@ -455,8 +436,6 @@ class ParTauModule(L.LightningModule):
         self._log_at_epoch_end(dataset="val")
 
     def on_train_epoch_start(self):
-        """Initialize storage for training outputs."""
-        self.training_outputs = []
         self.training_loss_accumulator = {
             key: []
             for key in [
@@ -476,4 +455,3 @@ class ParTauModule(L.LightningModule):
         }
         for k, v in epoch_metrics.items():
             self.log(f"train_losses/{k}", v)
-        self._log_at_epoch_end(dataset="train")

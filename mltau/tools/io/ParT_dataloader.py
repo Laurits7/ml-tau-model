@@ -114,26 +114,35 @@ class ParticleTransformerDataset(IterableDataset):
             torch.tensor(ak.to_numpy(data.gen_jet_tau_decaymode)) != -1
         ).long()
 
-        charge_tensor = (torch.tensor(ak.to_numpy(data.gen_jet_tau_charge)) == 1).long()
+        charge_tensor = (
+            torch.tensor(ak.to_numpy(data.gen_jet_tau_charge)) == 1
+        ).float()
 
-        dtheta = f.deltaTheta(gen_jet_tau_p4s.theta, jet_p4s.theta)
-        dphi = f.deltaPhi(gen_jet_tau_p4s.phi, jet_p4s.phi)
+        # dtheta = f.deltaTheta(gen_jet_tau_p4s.theta, jet_p4s.theta)
+
+        deta = f.signedDeltaEta(gen_jet_tau_p4s.eta, jet_p4s.eta)
+        dphi = f.signedDeltaPhi(gen_jet_tau_p4s.phi, jet_p4s.phi)
         # Add epsilon and clamp to avoid log(0) or log(negative)
         vis_pt_ratio = torch.tensor(gen_jet_tau_p4s.pt / jet_p4s.pt)
         vis_pt_ratio_safe = torch.clamp(vis_pt_ratio, min=eps)
 
         vis_m_ratio = torch.tensor(gen_jet_tau_p4s.mass / jet_p4s.mass)
         vis_m_ratio_safe = torch.clamp(vis_m_ratio, min=eps)
-        # Stack kinematic variables into a single tensor [N, 4] for [pT_vis, theta, phi, m_vis]
+        # Stack kinematic variables into a single tensor [N, 5] for [pT_vis, eta, sin(phi), cos(phi), m_vis]
         kinematics_tensor = torch.stack(
             [
                 torch.log(vis_pt_ratio_safe),  # pT_vis (log of pT ratio) - safe version
-                torch.tensor(dtheta),  # delta theta between gen_vis_tau and reco_jet
-                torch.tensor(dphi),  # delta phi  between gen_vis_tau and reco_jet
+                torch.tensor(deta),  # delta eta between gen_vis_tau and reco_jet
+                torch.sin(
+                    torch.tensor(dphi)
+                ),  # sin(delta phi) between gen_vis_tau and reco_jet
+                torch.cos(
+                    torch.tensor(dphi)
+                ),  # cos(delta phi) between gen_vis_tau and reco_jet
                 torch.log(vis_m_ratio_safe),  # m_vis
             ],
             dim=-1,
-        )  # Stack along last dimension to get [N, 4]
+        )  # Stack along last dimension to get [N, 5]
 
         # Pad and convert cand_kinematics to tensor
         cand_kinematics_tensor = torch.stack(
@@ -171,7 +180,7 @@ class ParticleTransformerDataset(IterableDataset):
             {
                 "kinematics": kinematics_tensor.float(),
                 "decay_mode": gen_jet_tau_decaymode_ohe.float(),
-                "charge": charge_tensor.long(),
+                "charge": charge_tensor.float(),
                 "is_tau": gen_jet_tau_decaymode_exists.long(),
             },
             mask,

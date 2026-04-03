@@ -33,7 +33,7 @@ def train(cfg: DictConfig):
 
     # Configure callbacks
     callbacks = [
-        TQDMProgressBar(refresh_rate=1000),
+        TQDMProgressBar(refresh_rate=100),  # Reduced refresh rate for CPU
         ModelCheckpoint(
             dirpath=models_dir,
             monitor="val_losses/loss",
@@ -55,13 +55,9 @@ def train(cfg: DictConfig):
                 default_hp_metric=False,
             ),
         ],
-        # Performance optimizations
         accelerator="auto",  # Automatically detect GPU/CPU
-        gradient_clip_val=1.0,  # Stability with variable sequence lengths
-        log_every_n_steps=50,  # Reduce logging overhead
         num_sanity_val_steps=0,  # Skip sanity validation for faster startup
         enable_progress_bar=True,  # Keep enabled for monitoring
-        precision="16-mixed",  # Enable mixed precision for faster training
     )
     trainer.fit(model=model, datamodule=datamodule)
 

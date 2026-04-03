@@ -1,4 +1,4 @@
-output_dir: /home/laurits/tmp/test_training
+output_dir: /home/laurits/0403_ntupleFix_dataloaderFix_optmizedModel
 defaults:
     - _self_
     - metrics/metrics
