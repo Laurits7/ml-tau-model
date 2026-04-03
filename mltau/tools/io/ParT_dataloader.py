@@ -25,6 +25,9 @@ class ParticleTransformerDataset(IterableDataset):
         self.num_rows = sum([rg.num_rows for rg in self.row_groups])
         print(f"There are {'{:,}'.format(self.num_rows)} jets in the dataset.")
 
+    def __len__(self):
+        return self.num_rows
+
     def _pad_and_convert_to_tensor(
         self, ak_array, dtype=torch.float32, fill_value=0, unsqueeze_dim=None
     ):
