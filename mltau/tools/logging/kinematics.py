@@ -119,9 +119,22 @@ def log_all_kinematics_metrics(
         pred_pt, true_pt, "pt", cfg.metrics.kinematics.pt, cfg, tb_logger, current_epoch
     )
 
-    # --- theta (radians → degrees) ---
-    pred_theta_rad = signal_predictions[:, 1] + reco.theta
-    true_theta_rad = signal_targets[:, 1] + reco.theta
+    # --- eta (direct: index 1 is delta_eta = gen_eta - reco_eta) ---
+    pred_eta = np.array(signal_predictions[:, 1]) + np.array(reco.eta)
+    true_eta = np.array(signal_targets[:, 1]) + np.array(reco.eta)
+    _log_single_variable(
+        pred_eta,
+        true_eta,
+        "eta",
+        cfg.metrics.kinematics.eta,
+        cfg,
+        tb_logger,
+        current_epoch,
+    )
+
+    # --- theta (derived from eta; radians → degrees) ---
+    pred_theta_rad = 2 * np.arctan(np.exp(-pred_eta))
+    true_theta_rad = 2 * np.arctan(np.exp(-true_eta))
     pred_theta_deg = np.rad2deg(pred_theta_rad)
     true_theta_deg = np.rad2deg(true_theta_rad)
     _log_single_variable(
@@ -134,9 +147,15 @@ def log_all_kinematics_metrics(
         current_epoch,
     )
 
-    # --- phi (radians → degrees) ---
-    pred_phi_rad = signal_predictions[:, 2] + reco.phi
-    true_phi_rad = signal_targets[:, 2] + reco.phi
+    # --- phi (indices 2,3 are sin/cos of delta_phi; radians → degrees) ---
+    pred_dphi = np.arctan2(
+        np.array(signal_predictions[:, 2]), np.array(signal_predictions[:, 3])
+    )
+    true_dphi = np.arctan2(
+        np.array(signal_targets[:, 2]), np.array(signal_targets[:, 3])
+    )
+    pred_phi_rad = np.array(reco.phi) + pred_dphi
+    true_phi_rad = np.array(reco.phi) + true_dphi
     pred_phi_deg = np.rad2deg(pred_phi_rad)
     true_phi_deg = np.rad2deg(true_phi_rad)
     _log_single_variable(
@@ -149,27 +168,14 @@ def log_all_kinematics_metrics(
         current_epoch,
     )
 
-    # --- m_vis ---
-    pred_m = np.exp(signal_predictions[:, 3]) * reco.mass
-    true_m = np.exp(signal_targets[:, 3]) * reco.mass
+    # --- m_vis (index 4 is log(m_gen / m_reco)) ---
+    pred_m = np.exp(signal_predictions[:, 4]) * np.array(reco.mass)
+    true_m = np.exp(signal_targets[:, 4]) * np.array(reco.mass)
     _log_single_variable(
         pred_m,
         true_m,
         "m_vis",
         cfg.metrics.kinematics.m_vis,
-        cfg,
-        tb_logger,
-        current_epoch,
-    )
-
-    # --- eta (derived from theta) ---
-    pred_eta = -np.log(np.tan(np.clip(pred_theta_rad, 1e-6, np.pi - 1e-6) / 2))
-    true_eta = -np.log(np.tan(np.clip(true_theta_rad, 1e-6, np.pi - 1e-6) / 2))
-    _log_single_variable(
-        pred_eta,
-        true_eta,
-        "eta",
-        cfg.metrics.kinematics.eta,
         cfg,
         tb_logger,
         current_epoch,
